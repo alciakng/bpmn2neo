@@ -64,12 +64,12 @@ B2N_OPENAI__EMBEDDING_MODEL=text-embedding-3-large
 # B2N_OPENAI__TEMPERATURE=0.2              # optional tuning
 # B2N_OPENAI__MAX_RETRIES=3                # optional retry
 
-# --- Container / runtime (optional) ---
-# B2N_CONTAINER__CREATE_CONTAINER=true
-# B2N_CONTAINER__CONTAINER_TYPE=<your container type>
-# B2N_CONTAINER__CONTAINER_ID=<your container id>
-# B2N_CONTAINER__CONTAINER_NAME=<your container name>
-# B2N_RUNTIME__LOG_LEVEL=INFO
+# --- Container / runtime ---
+B2N_CONTAINER__CREATE_CONTAINER=true
+B2N_CONTAINER__CONTAINER_TYPE=<your container type>
+B2N_CONTAINER__CONTAINER_ID=<your container id>
+B2N_CONTAINER__CONTAINER_NAME=<your container name>
+B2N_RUNTIME__LOG_LEVEL=INFO
 ```
 
 ### Python API (recommended)
@@ -164,3 +164,4 @@ Notes:
 - **OpenAI errors**  
   - Ensure `B2N_OPENAI__API_KEY` set; consider rate limits and retries.
 ---
+
