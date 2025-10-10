@@ -26,10 +26,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.8", "types-requests"]
-keyring = ["keyring>=24.3"]       
+keyring = ["keyring>=24.3"]
 
 [project.scripts]
-bpmn2neo = "bpmn2neo.cli:main"     # CLI entrypoint
+bpmn2neo = "bpmn2neo.cli:main"
 
 # ----- 핵심: src 레이아웃 설정 -----
 [tool.setuptools]

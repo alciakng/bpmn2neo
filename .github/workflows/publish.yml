@@ -24,16 +24,21 @@ jobs:
 
       - name: Debug METADATA
         run: |
-          python - <<'PY'
-          import glob, zipfile
-          whl = glob.glob('dist/*.whl')[0]
-          with zipfile.ZipFile(whl) as z:
-              meta = [n for n in z.namelist() if n.endswith('METADATA')][0]
-              m = z.read(meta).decode()
-              print(m.splitlines()[0])                      # Metadata-Version: 2.4 (예상)
-              print([l for l in m.splitlines() if l.startswith('Name: ')][0])
-              print([l for l in m.splitlines() if l.startswith('Version: ')][0])
-          PY
+          echo "=== Wheel contents ==="
+          unzip -l dist/*.whl | grep -E '(METADATA|WHEEL|entry_points)'
+          echo ""
+          echo "=== Full METADATA ==="
+          unzip -p dist/*.whl '*/METADATA'
+          echo ""
+          echo "=== Parsed with pkginfo ==="
+          pip install pkginfo
+          python -c "
+          import pkginfo, glob
+          w = pkginfo.Wheel(glob.glob('dist/*.whl')[0])
+          print(f'Name: {w.name}')
+          print(f'Version: {w.version}')
+          print(f'Metadata-Version: {w.metadata_version}')
+          " || echo "pkginfo failed to parse!"
 
       - name: Publish to PyPI (token)
         uses: pypa/gh-action-pypi-publish@release/v1   # 최신 릴리스 트랙
