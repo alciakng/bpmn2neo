@@ -34,6 +34,7 @@ bpmn2neo = "bpmn2neo.cli:main"     # CLI entrypoint
 # ----- 핵심: src 레이아웃 설정 -----
 [tool.setuptools]
 package-dir = { "" = "src" }
+license-files = ["LICENSE"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
