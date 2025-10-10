@@ -41,7 +41,7 @@ jobs:
           " || echo "pkginfo failed to parse!"
 
       - name: Publish to PyPI (token)
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@v1.12.2
         with:
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
