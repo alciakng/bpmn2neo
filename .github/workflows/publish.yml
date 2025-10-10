@@ -17,7 +17,7 @@ jobs:
         run: |
           rm -rf dist build *.egg-info
           python -m pip install -U pip
-          python -m pip install -U build setuptools wheel 
+          python -m pip install "setuptools<75" "wheel" "build"
 
       - name: Build
         run: python -m build
@@ -41,7 +41,7 @@ jobs:
           " || echo "pkginfo failed to parse!"
 
       - name: Publish to PyPI (token)
-        uses: pypa/gh-action-pypi-publish@v1.12.2
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
