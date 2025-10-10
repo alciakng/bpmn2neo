@@ -2,7 +2,11 @@ name: Publish to PyPI
 
 on:
   release:
-    types: [0.1.0]
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write 
 
 jobs:
   build-and-publish:
