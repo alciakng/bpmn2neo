@@ -11,6 +11,7 @@
 ---
 
 ## 1) Overview
+<img width="547" height="395" alt="Image" src="https://github.com/user-attachments/assets/2027ec46-9a81-4468-ab81-ec340980a74c" />
 
 **bpmn2neo** ingests BPMN 2.0 (`.bpmn`) files, persists a clean BPMN knowledge graph in **Neo4j 5.x**, then generates **hierarchical embeddings** for Graph-RAG.  
 The library is production-oriented: clean configuration via Pydantic `.env`, and a minimal public API.
@@ -164,4 +165,5 @@ Notes:
 - **OpenAI errors**  
   - Ensure `B2N_OPENAI__API_KEY` set; consider rate limits and retries.
 ---
+
 
