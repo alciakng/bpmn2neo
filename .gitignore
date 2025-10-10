@@ -1,0 +1,9 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# .gitignore
+.vscode
+*.venv/
+__pycache__/
+*.egg-info/

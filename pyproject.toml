@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bpmn2neo"
+version = "0.1.0"
+description = "Load BPMN 2.0 diagrams into Neo4j and create node embeddings for Graph-RAG."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Kim JongHwan", email = "kjhweb@outlook.kr" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent"
+]
+
+dependencies = [
+  "neo4j>=5.19",
+  "pydantic>=2.5",
+  "pydantic-settings>=2.3",
+  "openai>=1.30",
+  "tenacity>=8.2"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.8", "types-requests"]
+keyring = ["keyring>=24.3"]       
+
+[project.scripts]
+bpmn2neo = "bpmn2neo.cli:main"     # CLI entrypoint
+
+# ----- 핵심: src 레이아웃 설정 -----
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["bpmn2neo*"]
