@@ -51,27 +51,49 @@ The library is production-oriented: clean configuration via Pydantic `.env`, and
 pip install bpmn2neo
 ```
 
-### Minimal .env
+### setting .env
 ```env
-# --- Neo4j ---
-B2N_NEO4J__URI=neo4j://HOST:7687          # or neo4j+s:// for Aura/SSL
-B2N_NEO4J__USERNAME=neo4j
-B2N_NEO4J__PASSWORD=<your_password>
-B2N_NEO4J__DATABASE=neo4j                  # default DB name
+# =========================
+# bpmn2neo .env
+# =========================
+# --- Neo4j (REQUIRED) ---
+B2N_NEO4J__URI="YOUR_URI"        # or neo4j+s://<host>:7687
+B2N_NEO4J__USERNAME="YOUR_USERNAME"
+B2N_NEO4J__PASSWORD="YOUR_PASSWORD"      # if you prefer keyring, comment this and use PASSWORD_ALIAS below
+B2N_NEO4J__DATABASE="YOUR_DATABASE"
 
-# --- OpenAI (embeddings & LLM text) ---
-B2N_OPENAI__API_KEY=sk-...
-B2N_OPENAI__EMBEDDING_MODEL=text-embedding-3-large
-# B2N_OPENAI__TEMPERATURE=0.2              # optional tuning
-# B2N_OPENAI__MAX_RETRIES=3                # optional retry
+# Optional Neo4j tweaks:
+# B2N_NEO4J__PASSWORD_ALIAS=bpmn2neo/neo4j      # resolve secret via OS keyring
+# B2N_NEO4J__LOG_LEVEL=INFO                     # INFO/DEBUG/WARN/ERROR
 
-# --- Container / runtime ---
-B2N_CONTAINER__CREATE_CONTAINER=true
-B2N_CONTAINER__CONTAINER_TYPE=<your container type>
-B2N_CONTAINER__CONTAINER_ID=<your container id>
-B2N_CONTAINER__CONTAINER_NAME=<your container name>
-B2N_RUNTIME__LOG_LEVEL=INFO
-```
+# --- OpenAI (REQUIRED for embeddings/text) ---
+B2N_OPENAI__API_KEY="YOUR_API_KEY"     # if you prefer keyring, comment this and use API_KEY_ALIAS below
+B2N_OPENAI__EMBEDDING_MODEL="text-embedding-3-large"
+
+# Optional OpenAI tweaks:
+# B2N_OPENAI__API_KEY_ALIAS=bpmn2neo/openai     # resolve secret via OS keyring
+# B2N_OPENAI__EMBEDDING_DIMENSION=3072
+# B2N_OPENAI__TRANSLATION_MODEL=gpt-4o-mini
+# B2N_OPENAI__TEMPERATURE=0.2
+# B2N_OPENAI__MAX_TOKENS_FULL=600
+# B2N_OPENAI__MAX_TOKENS_SUMMARY=200
+# B2N_OPENAI__MAX_RETRIES=3
+# B2N_OPENAI__TIMEOUT=60
+# B2N_OPENAI__LOG_LEVEL=INFO
+
+# --- Container metadata  ---
+B2N_CONTAINER__CREATE_CONTAINER=True # default : true
+B2N_CONTAINER__CONTAINER_TYPE="YOUR_CONTAINER_TYPE"
+B2N_CONTAINER__CONTAINER_ID="YOUR_CONTAINER_ID"
+B2N_CONTAINER__CONTAINER_NAME="YOUR_CONTAINER_NAME"
+
+# --- Runtime (optional) ---
+# B2N_RUNTIME__LOG_LEVEL=INFO                  # global log level
+# B2N_RUNTIME__PARALLELISM=1                   # worker parallelism
+# B2N_RUNTIME__BATCH_SIZE=64                   # embedding batch size
+# B2N_RUNTIME__CACHE_DIR=/tmp/bpmn2neo_cache   # local cache dir if you need one
+# B2N_RUNTIME__DRY_RUN=false                   # true: do not write to DB
+# B2N_RUNTIME__FAIL_FAST=false                 # true: stop on first error
 
 ### Python API (recommended)
 ```python
@@ -92,7 +114,7 @@ create_node_embeddings(model_key=model_keys[0], settings=s)
 
 # 3) Pipeline (load + embed)
 result = load_and_embed(
-    bpmn_path="./data/bpmn/Order Process for Pizza.bpmn",#Your Path
+    bpmn_path="./data/bpmn/Order Process for Pizza.bpmn", #Your Path
     settings=s,
 )
 print("final model_key:", result["model_key"])
@@ -151,7 +173,6 @@ Notes:
 
 - **Settings resolution**: `Settings()` reads environment variables (and `.env`) using `pydantic-settings`. Keys are prefixed (e.g., `B2N_NEO4J__URI`).
 - **Model key**: if not provided, the loader derives it from the BPMN filename (stem).
-
 - **Security**: you may use keyring aliases instead of plain secrets (see comments in `settings.py`).
 
 ---
@@ -165,5 +186,6 @@ Notes:
 - **OpenAI errors**  
   - Ensure `B2N_OPENAI__API_KEY` set; consider rate limits and retries.
 ---
+
 
 
