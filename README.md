@@ -94,6 +94,7 @@ B2N_CONTAINER__CONTAINER_NAME="YOUR_CONTAINER_NAME"
 # B2N_RUNTIME__CACHE_DIR=/tmp/bpmn2neo_cache   # local cache dir if you need one
 # B2N_RUNTIME__DRY_RUN=false                   # true: do not write to DB
 # B2N_RUNTIME__FAIL_FAST=false                 # true: stop on first error
+```
 
 ### Python API (recommended)
 ```python
@@ -186,6 +187,7 @@ Notes:
 - **OpenAI errors**  
   - Ensure `B2N_OPENAI__API_KEY` set; consider rate limits and retries.
 ---
+
 
 
 
