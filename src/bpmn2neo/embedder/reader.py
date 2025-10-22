@@ -691,8 +691,134 @@ class Reader:
         """
         pid = str(process_id)
         cypher = """
-        // (omitted here for brevity – original query preserved)
-        """
+                // 0) Target process
+                MATCH (p:Process {id: $pid})
+
+                // 1) Collect all nodes in the process
+                OPTIONAL MATCH (p)-[:HAS_LANE]->(:Lane)-[:OWNS_NODE]->(n1)
+                WITH p, collect(n1) AS ns1
+                OPTIONAL MATCH (p)-[:OWNS_NODE]->(n2)
+                WITH p, ns1, collect(n2) AS ns2
+                WITH p, [x IN (ns1 + ns2) WHERE x IS NOT NULL] AS N_all
+
+                // 1-1) Top-level nodes only (N_top):
+                //      - Exclude nodes that are inside any subprocess/transaction/ad-hoc subprocess via :CONTAINS
+                //      - Exclude nodes attached to boundary events (both directions)
+                WITH p, N_all,
+                    [n IN N_all
+                        WHERE NOT EXISTS {
+                                MATCH (sp:Activity)
+                                WHERE toLower(coalesce(sp.activityType,'')) IN ['subprocess','transaction']
+                                AND (sp)-[:CONTAINS]->(n)
+                            }
+                    ] AS N_top
+                
+
+                // 2) Start/End candidates (based on N_top)
+                WITH N_top,
+                [n IN N_top
+                    WHERE (n:Event AND toLower(coalesce(n.position,''))='start')
+                        OR size([x IN N_top WHERE (x)-[:SEQUENCE_FLOW]->(n)]) = 0
+                ] AS starts,
+                [n IN N_top
+                    WHERE (n:Event AND toLower(coalesce(n.position,''))='end')
+                        OR size([x IN N_top WHERE (n)-[:SEQUENCE_FLOW]->(x)]) = 0
+                ] AS ends
+                UNWIND starts AS s
+
+                // 3) Representative paths via BFS (no max depth)
+                CALL apoc.path.expandConfig(s, {
+                relationshipFilter: 'SEQUENCE_FLOW>|HAS_BOUNDARY_EVENT>',
+                bfs: true,
+                whitelistNodes: N_top,
+                terminatorNodes: ends,
+                uniqueness: 'NODE_GLOBAL',
+                filterStartNode: true,
+                maxLevel: -1
+                }) YIELD path
+                WITH ends, path
+                WHERE last(nodes(path)) IN ends
+                WITH path
+                ORDER BY length(path) ASC
+                LIMIT $maxPaths
+
+                // 4) Build hop maps + collect subprocess candidates
+                //    Index multiple paths and collect hops per path
+                WITH collect(path) AS paths
+                UNWIND range(0, size(paths)-1) AS i
+                WITH i AS path_idx, paths[i] AS p
+
+                WITH path_idx, relationships(p) AS rels
+                UNWIND rels AS r
+                WITH path_idx, r, startNode(r) AS s, endNode(r) AS t
+
+                // Hop map + subprocess candidates (per path)
+                WITH
+                path_idx,
+                {
+                    id: coalesce(r.id, ''),
+                    condition: coalesce(r.condition,''),
+                    is_default: coalesce(r.isDefault,false),
+
+                    source: {
+                    id: s.id,
+                    name: coalesce(s.name, 'Node ' + toString(s.id)),
+                    type: CASE
+                        WHEN s:Event THEN 'Event'
+                        WHEN s:Gateway THEN 'Gateway'
+                        WHEN s:Activity THEN 'Activity'
+                        ELSE head(labels(s))
+                    END,
+                    activityType: coalesce(s.activityType,''),
+                    position: coalesce(s.position,''),
+                    detailType: coalesce(s.detailType,''),
+                    gatewayDirection: coalesce(s.gatewayDirection,''),
+                    gatewayDefault: coalesce(s.gatewayDefault,'')
+                    },
+
+                    target: {
+                    id: t.id,
+                    name: coalesce(t.name, 'Node ' + toString(t.id)),
+                    type: CASE
+                        WHEN t:Event THEN 'Event'
+                        WHEN t:Gateway THEN 'Gateway'
+                        WHEN t:Activity THEN 'Activity'
+                        ELSE head(labels(t))
+                    END,
+                    activityType: coalesce(t.activityType,''),
+                    position: coalesce(t.position,''),
+                    detailType: coalesce(t.detailType,''),
+                    gatewayDirection: coalesce(t.gatewayDirection,''),
+                    gatewayDefault: coalesce(t.gatewayDefault,'')
+                    }
+                } AS hop,
+
+                CASE
+                    WHEN s:Activity AND toLower(coalesce(s.activityType,'')) IN ['subprocess','transaction']
+                    THEN {id:s.id, name:coalesce(s.name,''), activityType:toLower(coalesce(s.activityType,''))}
+                    ELSE NULL
+                END AS sp_s,
+
+                CASE
+                    WHEN t:Activity AND toLower(coalesce(t.activityType,'')) IN ['subprocess','transaction']
+                    THEN {id:t.id, name:coalesce(t.name,''), activityType:toLower(coalesce(t.activityType,''))}
+                    ELSE NULL
+                END AS sp_t
+
+                // Aggregate hops per path and per-path subprocess candidates
+                WITH
+                path_idx,
+                collect(hop) AS one_path,
+                [x IN (collect(sp_s) + collect(sp_t)) WHERE x IS NOT NULL] AS sp_for_path
+
+                // Collect all paths into a list; take the union of all subprocess candidates
+                WITH
+                collect(one_path) AS main_paths,
+                collect(sp_for_path) AS sp_lists
+                RETURN
+                main_paths,
+                apoc.coll.toSet(apoc.coll.flatten(sp_lists)) AS subprocess_candidates
+                """
         try:
             rows = self.repository.execute_single_query(cypher, {"pid": pid, "maxPaths": int(max_paths)})
             self.logger.info("[FETCH][PATH][PROC] rows", extra={"extra": {"count": len(rows or [])}})
@@ -747,8 +873,164 @@ class Reader:
             return {"main_paths": [], "subprocess_candidates": []}
 
         cypher = """
-        // (omitted here for brevity – original query preserved)
-        """
+                // Restrict scope to lane-owned nodes passed from Python
+                WITH $laneNodeIds AS N_all
+
+                // 0) Keep only top-level nodes within the lane:
+                //    - Drop nodes contained by subprocess/transaction/ad-hoc via :CONTAINS
+                WITH N_all,
+                    [n IN N_all
+                    WHERE NOT EXISTS {
+                        MATCH (sp:Activity)-[:CONTAINS]->(x)
+                        WHERE toLower(coalesce(sp.activityType,'')) IN ['subprocess','transaction','adhocsubprocess']
+                        AND x.id = n
+                    }
+                    ] AS N_top
+
+                // 1) Exclude boundary-related nodes (both directions)
+                //    - drop boundary events themselves and attached activities
+                WITH
+                [n IN N_top
+                    WHERE NOT EXISTS { MATCH (:Activity)-[:HAS_BOUNDARY_EVENT]->(be:Event) WHERE be.id = n }
+                    AND NOT EXISTS { MATCH (src)-[:HAS_BOUNDARY_EVENT]->(:Event) WHERE src.id = n }
+                ] AS N_top
+
+                // 2) Start/End base sets (rules 1 & 2)
+                //    - start: explicit StartEvent OR no incoming flow within lane
+                //    - end  : explicit EndEvent   OR no outgoing flow within lane
+                WITH N_top,
+                    [n IN N_top
+                        WHERE (EXISTS { MATCH (ev:Event) WHERE ev.id = n AND toLower(coalesce(ev.position,'')) = 'start' })
+                        OR size([x IN N_top WHERE EXISTS {
+                                    MATCH (s)-[:SEQUENCE_FLOW]->(t)
+                                    WHERE s.id = x AND t.id = n
+                                }]) = 0
+                    ] AS starts_base,
+                    [n IN N_top
+                        WHERE (EXISTS { MATCH (ev:Event) WHERE ev.id = n AND toLower(coalesce(ev.position,'')) = 'end' })
+                        OR size([x IN N_top WHERE EXISTS {
+                                    MATCH (s)-[:SEQUENCE_FLOW]->(t)
+                                    WHERE s.id = n AND t.id = x
+                                }]) = 0
+                    ] AS ends_base
+
+                // 3) Fallback rule (if 1 & 2 yield empty):
+                //    - if starts_base empty → start = head(N_top)
+                //    - if ends_base   empty → end   = last(N_top)
+                WITH N_top,
+                    CASE
+                    WHEN size(starts_base) > 0 THEN starts_base
+                    WHEN size(N_top)  > 0 THEN [head(N_top)]
+                    ELSE []
+                    END AS starts,
+                    CASE
+                    WHEN size(ends_base) > 0 THEN ends_base
+                    WHEN size(N_top) > 0 THEN [last(N_top)]
+                    ELSE []
+                    END AS ends
+
+                // 4) Expand from each start, but confine traversal strictly to lane candidates via whitelist
+                UNWIND starts AS sid
+                MATCH (s) WHERE s.id = sid
+
+                // Build whitelist node objects from N_top (ids -> nodes)
+                MATCH (wl) WHERE wl.id IN N_top
+                WITH collect(wl) AS WL, ends, s
+
+                CALL apoc.path.expandConfig(s, {
+                relationshipFilter: 'SEQUENCE_FLOW>|HAS_BOUNDARY_EVENT>', // OR semantics via '|'
+                bfs: true,
+                uniqueness: 'NODE_GLOBAL',   // avoid revisiting nodes globally
+                whitelistNodes: WL,          // must be a list of node objects, not ids
+                filterStartNode: true,
+                maxLevel: -1
+                }) YIELD path
+
+                // Keep only paths whose last node is one of the ends
+                WITH ends, path
+                WHERE last(nodes(path)).id IN ends
+
+                // Rank by path length and keep top-k
+                WITH path
+                ORDER BY length(path) ASC
+                LIMIT $maxPaths
+
+                // ----- Emit hop maps (source/target + rel properties) -----
+                WITH collect(path) AS paths
+                UNWIND range(0, size(paths)-1) AS i
+                WITH i AS path_idx, paths[i] AS p
+
+                WITH path_idx, relationships(p) AS rels
+                UNWIND rels AS r
+                WITH path_idx, r, startNode(r) AS s, endNode(r) AS t
+                WHERE s.id IN $laneNodeIds AND t.id IN $laneNodeIds   // keep hops strictly within lane
+
+                WITH
+                path_idx,
+                {
+                    id: coalesce(r.id, ''),
+                    condition: coalesce(r.condition,''),
+                    is_default: coalesce(r.isDefault,false),
+
+                    source: {
+                    id: s.id,
+                    name: coalesce(s.name, 'Node ' + toString(s.id)),
+                    type: CASE
+                            WHEN s:Event   THEN 'Event'
+                            WHEN s:Gateway THEN 'Gateway'
+                            WHEN s:Activity THEN 'Activity'
+                            ELSE head(labels(s))
+                            END,
+                    activityType: coalesce(s.activityType,''),
+                    position: coalesce(s.position,''),
+                    detailType: coalesce(s.detailType,''),
+                    gatewayDirection: coalesce(s.gatewayDirection,''),
+                    gatewayDefault: coalesce(s.gatewayDefault,'')
+                    },
+
+                    target: {
+                    id: t.id,
+                    name: coalesce(t.name, 'Node ' + toString(t.id)),
+                    type: CASE
+                            WHEN t:Event   THEN 'Event'
+                            WHEN t:Gateway THEN 'Gateway'
+                            WHEN t:Activity THEN 'Activity'
+                            ELSE head(labels(t))
+                            END,
+                    activityType: coalesce(t.activityType,''),
+                    position: coalesce(t.position,''),
+                    detailType: coalesce(t.detailType,''),
+                    gatewayDirection: coalesce(t.gatewayDirection,''),
+                    gatewayDefault: coalesce(t.gatewayDefault,'')
+                    }
+                } AS hop,
+
+                CASE
+                    WHEN s:Activity AND toLower(coalesce(s.activityType,'')) IN ['subprocess','transaction','adhocsubprocess']
+                    THEN {id:s.id, name:coalesce(s.name,''), activityType:toLower(coalesce(s.activityType,''))}
+                    ELSE NULL
+                END AS sp_s,
+
+                CASE
+                    WHEN t:Activity AND toLower(coalesce(t.activityType,'')) IN ['subprocess','transaction','adhocsubprocess']
+                    THEN {id:t.id, name:coalesce(t.name,''), activityType:toLower(coalesce(t.activityType,''))}
+                    ELSE NULL
+                END AS sp_t
+
+                WITH
+                path_idx,
+                collect(hop) AS one_path,
+                [x IN (collect(sp_s) + collect(sp_t)) WHERE x IS NOT NULL] AS sp_for_path
+
+                WITH
+                collect(one_path) AS main_paths,
+                collect(sp_for_path) AS sp_lists
+                RETURN
+                main_paths,
+                apoc.coll.toSet(apoc.coll.flatten(sp_lists)) AS subprocess_candidates
+                """
+                
+
         try:
             rows = self.repository.execute_single_query(cypher, {"laneNodeIds": lane_node_ids, "maxPaths": int(max_paths)})
             self.logger.info("[FETCH][PATH][LANE] rows", extra={"extra": {"count": len(rows or [])}})
@@ -776,9 +1058,111 @@ class Reader:
         Returns [] on error (behavior preserved).
         """
         spid = str(sp_id)
+
         cypher = """
-        // (omitted here for brevity – original query preserved)
+        // 0) Target subprocess/transaction/ad-hoc by domain id
+        MATCH (sp:Activity {id: $spid})
+        WHERE toLower(coalesce(sp.activityType,'')) IN ['subprocess','transaction']
+
+        // 1) Collect internal nodes (via :CONTAINS)
+        OPTIONAL MATCH (sp)-[:CONTAINS]->(n)
+        WITH sp, collect(n) AS SN
+
+        // 1-1) Exclude nodes attached to boundary events (both directions)
+        WITH sp, [n IN SN
+                WHERE NOT EXISTS { MATCH (:Activity)-[:HAS_BOUNDARY_EVENT]->(n) }
+                    AND NOT EXISTS { MATCH (n)-[:HAS_BOUNDARY_EVENT]->(:Event) }
+                ] AS SNF
+
+        // 2) Internal start/end candidates (within SNF)
+        WITH sp, SNF,
+        [n IN SNF
+            WHERE (n:Event AND toLower(coalesce(n.position,''))='start')
+                OR size([x IN SNF WHERE (x)-[:SEQUENCE_FLOW]->(n)])=0
+        ] AS starts,
+        [n IN SNF
+            WHERE (n:Event AND toLower(coalesce(n.position,''))='end')
+                OR size([x IN SNF WHERE (n)-[:SEQUENCE_FLOW]->(x)])=0
+        ] AS ends
+        UNWIND starts AS s
+
+        // 3) Representative internal paths (BFS, no max depth), keep up to $maxPaths shortest
+        CALL apoc.path.expandConfig(s, {
+        relationshipFilter: 'SEQUENCE_FLOW>|HAS_BOUNDARY_EVENT>',
+        bfs: true,
+        whitelistNodes: SN,
+        terminatorNodes: ends,
+        uniqueness: 'NODE_GLOBAL',
+        filterStartNode: true,
+        maxLevel: -1
+        }) YIELD path
+        WITH ends, path, sp
+        WHERE last(nodes(path)) IN ends
+        WITH sp, path
+        ORDER BY length(path) ASC
+        LIMIT $maxPaths
+
+        // 4) Build hop maps (same structure as process paths) and collect nested subprocess-like candidates
+        WITH collect(path) AS paths, sp
+        UNWIND range(0, size(paths)-1) AS i
+        WITH sp, i AS path_idx, paths[i] AS p
+
+        WITH sp, path_idx, relationships(p) AS rels
+        UNWIND rels AS r
+        WITH sp, path_idx, r, startNode(r) AS s, endNode(r) AS t
+
+        WITH
+        sp, path_idx,
+        {
+            seq_flow_id: coalesce(r.id, ''),
+            condition: coalesce(r.condition,''),
+            is_default: coalesce(r.isDefault,false),
+
+            source: {
+                id: s.id,
+                name: coalesce(s.name, 'Node ' + toString(s.id)),
+                type: CASE
+                    WHEN s:Event THEN 'Event'
+                    WHEN s:Gateway THEN 'Gateway'
+                    WHEN s:Activity THEN 'Activity'
+                    ELSE head(labels(s))
+                END,
+                activityType: coalesce(s.activityType,''),
+                position: coalesce(s.position,''),
+                detailType: coalesce(s.detailType,''),
+                gatewayDirection: coalesce(s.gatewayDirection,''),
+                gatewayDefault: coalesce(s.gatewayDefault,'')
+            },
+
+            target: {
+                id: t.id,
+                name: coalesce(t.name, 'Node ' + toString(t.id)),
+                type: CASE
+                    WHEN t:Event THEN 'Event'
+                    WHEN t:Gateway THEN 'Gateway'
+                    WHEN t:Activity THEN 'Activity'
+                    ELSE head(labels(t))
+                END,
+                activityType: coalesce(t.activityType,''),
+                position: coalesce(t.position,''),
+                detailType: coalesce(t.detailType,''),
+                gatewayDirection: coalesce(t.gatewayDirection,''),
+                gatewayDefault: coalesce(t.gatewayDefault,'')
+            }
+        } AS hop
+
+        // 5) Aggregate hops per internal path and deduplicate nested candidates
+        WITH
+        sp, collect(hop) AS one_path
+
+        WITH
+        sp,
+        collect(one_path) AS subprocess_paths
+
+        RETURN
+        subprocess_paths
         """
+
         try:
             rows = self.repository.execute_single_query(cypher, {"spid": spid, "maxPaths": int(max_paths)})
             self.logger.info("[FETCH][PATH][SUBPROC] rows", extra={"extra": {"count": len(rows or []), "sp_id": spid}})

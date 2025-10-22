@@ -12,7 +12,7 @@ from bpmn2neo.settings import Settings
 from bpmn2neo.loader.loader import Loader
 from bpmn2neo.embedder.orchestrator import Orchestrator
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 logger = Logger.get_logger("bpmn2neo")
 
 def load_bpmn_to_neo4j(
@@ -141,3 +141,4 @@ def load_and_embed(
     except Exception as e:
         logger.error("[PIPELINE] failed", extra={"extra": {"err": str(e)}})
         raise
+    

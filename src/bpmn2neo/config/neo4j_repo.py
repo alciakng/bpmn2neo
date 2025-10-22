@@ -37,7 +37,7 @@ class Neo4jRepository:
     def execute_single_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Execute a single Cypher query and return list of dict records."""
         params = params or {}
-        self.logger.info("[CYPHER][SINGLE] running", extra={"extra": {"q": self._short(query), "params": self._safe(params)}})
+        self.logger.info("[CYPHER][SINGLE] running", extra={"extra": {"q": self._short(query)}})
         try:
             with self.driver.session(database=self.cfg.database) as session:  
                 result = session.run(query, **params)

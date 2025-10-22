@@ -285,7 +285,7 @@ class Orchestrator:
         """
         Persist a list of artifacts to Neo4j.
         Each artifact must contain:
-          node_id, full_prop, emb_prop, full_text, (summary_prop/summary_text optional), vector (optional).
+          node_id, raw,prop, full_prop, emb_prop, full_text, (summary_prop/summary_text optional), vector (optional).
         If vector is missing, compute on the fly via builder.embedder.
         If summary_prop is missing, it will not be written.
         Non-functional: structured logs + try/except.
@@ -296,18 +296,20 @@ class Orchestrator:
             try:
                 node_id = art["node_id"]
 
-                full_prop  = art.get("full_prop")
-                sum_prop   = art.get("summary_prop")
-                emb_prop   = art.get("emb_prop")
-                full_txt   = art.get("full_text")
-                sum_txt    = art.get("summary_text")
-                vec        = art.get("vector")
+                raw_prop        = art.get("raw_prop")
+                full_prop       = art.get("full_prop")
+                sum_prop        = art.get("summary_prop")
+                emb_prop        = art.get("emb_prop")
+                raw_context     = art.get("raw_text")
+                full_context    = art.get("full_text")
+                sum_context     = art.get("summary_text")
+                vec             = art.get("vector")
 
                 # Compute vector if missing and full text exists
                 try:
-                    if vec is None and full_txt is not None:
+                    if vec is None and full_context is not None:
                         self.logger.debug(f"{LOG_PREFIX}[SAVE] embedding start", extra={"extra": {"id": node_id}})
-                        vec = self.embedder.embed(full_txt)
+                        vec = self.embedder.embed(full_context)
                         art["vector"] = vec
                         self.logger.debug(f"{LOG_PREFIX}[SAVE] embedding done", extra={"extra": {"id": node_id}})
                 except Exception as e_emb:
@@ -316,10 +318,12 @@ class Orchestrator:
 
                 # Build properties to update
                 props = {}
-                if full_prop and full_txt is not None:
-                    props[full_prop] = full_txt
-                if sum_prop and (sum_txt is not None):
-                    props[sum_prop] = sum_txt
+                if raw_prop and raw_context is not None:
+                    props[raw_prop] = raw_context
+                if full_prop and full_context is not None:
+                    props[full_prop] = full_context
+                if sum_prop and (sum_context is not None):
+                    props[sum_prop] = sum_context
                 if emb_prop and vec is not None:
                     props[emb_prop] = vec
 

@@ -783,7 +783,7 @@ class ContextWriter:
         )
         return full, summary
 
-    def generate_participant_context(self, participant: dict, processes: list[dict]) -> tuple[str, str]:
+    def generate_participant_context(self, payload: dict) -> tuple[str, str]:
         """
         Generate participant-level FULL/SUMMARY texts from participant + processes.
         Enforces 'FULL:' / 'SUMMARY:' markers; relies on caller for fallback.
@@ -793,20 +793,12 @@ class ContextWriter:
         full, summary = "", ""
 
         try:
-            pname = (participant or {}).get("name") or "Participant"
-            pid = (participant or {}).get("id")
+            p = payload.get("participant") or {}
+            procs = payload.get("processes") or []
+            pid = p.get("id")
+            pname = (p.get("name") or f"Participant {pid}").strip()
 
-            proc_payload = []
-            for p in (processes or []):
-                proc_payload.append({
-                    "id": str(p.get("id") or "").strip(),
-                    "name": (p.get("name") or "").strip(),
-                    "full_text": (p.get("full_text") or "").strip(),
-                    "summary_text": (p.get("summary_text") or "").strip(),
-                })
-
-            self.logger.info(f"{PFX}[PARTICIPANT] start: pid=%s name='%s' processes=%d", pid, pname, len(proc_payload))
-            self.logger.debug(f"{PFX}[PARTICIPANT] payload keys=%s", (list(proc_payload[0].keys()) if proc_payload else []))
+            self.logger.info(f"{PFX}[PARTICIPANT] start: pid=%s name='%s'", pid, pname)
 
             if getattr(self, "client", None) is None:
                 self.logger.warning(f"{PFX}[PARTICIPANT] no client configured; returning empty for fallback.")
@@ -824,7 +816,7 @@ class ContextWriter:
                 "SUMMARY:\n"
                 f"- Only the participant-level role for '{pname}' in 1–2 sentences.\n\n"
                 "JSON INPUT (structured):\n"
-                + json.dumps({"participant": participant, "processes": proc_payload}, ensure_ascii=False, indent=2)
+                + json.dumps({"participant": p, "processes": procs}, ensure_ascii=False, indent=2)
                 + "\n\nOutput format exactly:\nFULL:\n<text>\nSUMMARY:\n<text>\n"
             )
 
@@ -883,7 +875,7 @@ class ContextWriter:
             self.logger.error(f"{PFX}[PARTICIPANT] fatal error: {e}", exc_info=True)
             return "", ""
 
-    def generate_model_context(self, model: dict, participants: list[dict]) -> tuple[str, str]:
+    def generate_model_context(self, payload: dict) -> tuple[str, str]:
         """
         Generate model-level FULL/SUMMARY texts from model + participants.
         Enforces 'FULL:' / 'SUMMARY:' markers; relies on caller for fallback.
@@ -895,20 +887,13 @@ class ContextWriter:
         try:
             # 1) Normalize inputs (guarded) -----------------------------------------
             try:
-                mname = (model or {}).get("name") or "Model"
-                mid = (model or {}).get("id")
+                # Basic validation
+                m = payload.get("model") or {}
+                plist = payload.get("participants") or []
+                mid = m.get("id")
+                mname = (m.get("name") or f"Collaboration {mid}").strip()
 
-                part_payload = []
-                for p in (participants or []):
-                    part_payload.append({
-                        "id": str(p.get("id") or "").strip(),
-                        "name": (p.get("name") or "").strip(),
-                        "full_text": (p.get("full_text") or "").strip(),
-                        "summary_text": (p.get("summary_text") or "").strip(),
-                    })
-
-                self.logger.info(f"{PFX}[MODEL] start: mid=%s name='%s' participants=%d", mid, mname, len(part_payload))
-                self.logger.debug(f"{PFX}[MODEL] payload keys=%s", (list(part_payload[0].keys()) if part_payload else []))
+                self.logger.info(f"{PFX}[MODEL] start: mid=%s name='%s'", mid, mname)
             except Exception as e_norm:
                 self.logger.error(f"{PFX}[MODEL] normalization error: {e_norm}", exc_info=True)
                 return "", ""
@@ -936,7 +921,7 @@ class ContextWriter:
                     "SUMMARY:\n"
                     f"- Only the model-level role for '{mname}' in 1–2 sentences.\n\n"
                     "JSON INPUT (structured):\n"
-                    + json.dumps({"model": model, "participants": part_payload}, ensure_ascii=False, indent=2)
+                    + json.dumps({"model": m, "participants": plist}, ensure_ascii=False, indent=2)
                     + "\n\nOutput format exactly:\nFULL:\n<text>\nSUMMARY:\n<text>\n"
                 )
                 self.logger.debug(

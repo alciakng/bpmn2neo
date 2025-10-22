@@ -1,5 +1,6 @@
 # builder.py
 import collections
+import json
 import re
 from typing import Dict, Any, List, Optional, Set, Tuple
 
@@ -68,7 +69,7 @@ class Builder:
                 self.logger.exception(f"{LOG_PREFIX}[INIT] Embedder DI failed: {e_emb}")
                 raise
 
-            self.PROP_MAP = ("full_context", "summary_context", "context_vector")
+            self.PROP_MAP = ("raw_context","full_context", "summary_context", "context_vector")
 
             self.logger.info(f"{LOG_PREFIX}[INIT] done")
         except Exception:
@@ -85,11 +86,7 @@ class Builder:
     ) -> dict:
         """
         Model-level aggregation with optional LLM summarization (fallback to simple assembly).
-        Logging policy:
-          - INFO: start/end, counts, output sizes
-          - DEBUG: truncated bodies
-          - WARN: missing artifacts or empty LLM outputs
-          - ERROR: exceptions with stack traces
+        Change: LLM call now receives a single JSON payload; the same payload is stored in artifact.raw.
         """
         import json  # keep original import locality
 
@@ -104,43 +101,43 @@ class Builder:
                 for k, v in ctx["participant_index"].items():
                     pid = str(k).strip() if k is not None else ""
                     nm = (v.get("name") if isinstance(v, dict) else v) or ""
-                    nm = nm.strip() if isinstance(nm, str) else ""
-                    if pid and nm:
-                        part_name_index[pid] = nm
-
-            for p in (ctx.get("participants") or []):
-                if not isinstance(p, dict):
-                    continue
-                iid = p.get("id")
-                nm  = p.get("name")
-                pid = str(iid).strip() if iid is not None else ""
-                if pid and nm:
-                    part_name_index[pid] = (nm or "").strip()
+                    if pid:
+                        part_name_index[pid] = (nm or "").strip()
 
             arts = participant_artifacts or []
             arts_by_pid = {
                 (str(a.get("node_id")).strip() if a.get("node_id") is not None else ""): a
                 for a in arts if a.get("node_id") is not None
             }
+
             def _pname(pid: str) -> str:
                 return part_name_index.get(pid) or f"Participant {pid or '?'}"
 
             sorted_pids = sorted(arts_by_pid.keys(), key=lambda pid: ((_pname(pid)).lower(), pid))
-
-            self.logger.info(f"{LOG_PREFIX}[MODEL] start", extra={"extra": {"model_id": mid, "name": mname, "participants": len(sorted_pids)}})
-            self.logger.debug(f"{LOG_PREFIX}[MODEL] sorted_pids={sorted_pids}")
+            self.logger.info(
+                f"{LOG_PREFIX}[MODEL] start",
+                extra={"extra": {"model_id": mid, "name": mname, "participants": len(sorted_pids)}}
+            )
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[MODEL] init/index error: {e}", exc_info=True)
             full_text = f"# {ctx.get('model', {}).get('name', 'Model')} Collaboration.\n\n(No participant texts due to error)"
             summary_text = f"# {ctx.get('model', {}).get('name', 'Model')} Collaboration.\n\n(No participant summaries due to error)"
-            return self._make_artifact(node_id=ctx.get('model', {}).get('id'), node_name=ctx.get('model', {}).get('name'), level="model", full=full_text, summary=summary_text)
+            return self._make_artifact(
+                node_id=(ctx.get('model', {}) or {}).get('id'),
+                node_name=(ctx.get('model', {}) or {}).get('name'),
+                level="model",
+                full=full_text,
+                summary=summary_text,
+                raw={"raw_prop": "raw_payload", "raw_context": {"error": "init/index error"}}
+            )
 
         # --- H1 headers (common to both paths) ---
-        full_h1  = f"# {mname} Collaboration."
-        summ_h1  = f"# {mname} Collaboration."
+        full_h1 = f"# {mname} Collaboration."
+        summ_h1 = f"# {mname} Collaboration."
 
-        # --- 1) LLM delegated path ---
+        # --- 1) LLM delegated path with single JSON payload ---
         full_text, summary_text = "", ""
+        payload = None
         try:
             if len(sorted_pids) >= 1 and getattr(self, "context_writer", None) is not None:
                 part_payload = []
@@ -153,11 +150,13 @@ class Builder:
                         "summary_text": (art.get("summary_text") or "").strip(),
                     })
 
-                llm_full, llm_summary = self.context_writer.generate_model_context(
-                    model={"id": mid, "name": mname},
-                    participants=part_payload,
-                )
+                # Single JSON struct to ContextWriter
+                payload = {
+                    "model": {"id": mid, "name": mname},
+                    "participants": part_payload,
+                }
 
+                llm_full, llm_summary = self.context_writer.generate_model_context(payload)  
                 llm_full = (llm_full or "").strip()
                 llm_summary = (llm_summary or "").strip()
 
@@ -166,14 +165,20 @@ class Builder:
                 if llm_summary:
                     summary_text = f"{summ_h1}\n\n{llm_summary}".strip()
 
-                self.logger.info(f"{LOG_PREFIX}[MODEL] LLM sizes", extra={"extra": {"full": len(full_text or ""), "summary": len(summary_text or "")}})
-                self.logger.debug(f"{LOG_PREFIX}[MODEL] LLM FULL (trunc): {(full_text if len(full_text) <= 2000 else (full_text[:2000] + '...'))}")
-                self.logger.debug(f"{LOG_PREFIX}[MODEL] LLM SUMMARY: {summary_text}")
+                self.logger.info(
+                    f"{LOG_PREFIX}[MODEL] LLM sizes",
+                    extra={"extra": {"full": len(full_text or ""), "summary": len(summary_text or "")}}
+                )
+                self.logger.debug(f"{LOG_PREFIX}[MODEL] LLM FULL: %s", full_text if len(full_text) <= 2000 else (full_text[:2000] + "..."))
+                self.logger.debug(f"{LOG_PREFIX}[MODEL] LLM SUMMARY: %s", llm_summary)
 
                 if not (full_text and summary_text):
                     self.logger.warning(f"{LOG_PREFIX}[MODEL] LLM outputs empty; fallback will be used.")
             else:
-                self.logger.info(f"{LOG_PREFIX}[MODEL] LLM skipped", extra={"extra": {"participants": len(sorted_pids), "context_writer": type(getattr(self, 'context_writer', None)).__name__}})
+                self.logger.info(
+                    f"{LOG_PREFIX}[MODEL] LLM skipped",
+                    extra={"extra": {"writer": type(getattr(self, 'context_writer', None)).__name__}}
+                )
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[MODEL] LLM path error: {e}", exc_info=True)
             full_text, summary_text = "", ""
@@ -183,44 +188,57 @@ class Builder:
             if not (full_text and summary_text):
                 full_lines = [full_h1]
                 summ_lines = [summ_h1]
-
                 for pid in sorted_pids:
                     pname = _pname(pid)
                     art   = arts_by_pid[pid]
                     pf    = (art.get("full_text") or "").strip()
                     ps    = (art.get("summary_text") or "").strip()
 
-                    full_lines.append(f"## {pname}.")
                     if pf:
-                        full_lines.append(pf)
+                        full_lines.append(f"### {pname}\n{pf}")
+                    elif ps:
+                        full_lines.append(f"### {pname}\n{ps}")
 
-                    summ_lines.append(f"## {pname}.")
                     if ps:
-                        summ_lines.append(ps)
+                        summ_lines.append(f"### {pname}\n{ps}")
+                    elif pf:
+                        summ_lines.append(f"### {pname}\n{pf}")
 
-                full_text    = "\n\n".join(full_lines).strip()
-                summary_text = "\n\n".join(summ_lines).strip()
+                full_text = "\n\n".join(full_lines).strip() if full_lines else f"{full_h1}\n\n(No participant texts)"
+                summary_text = "\n\n".join(summ_lines).strip() if summ_lines else f"{summ_h1}\n\n(No participant summaries)"
 
-                self.logger.info(f"{LOG_PREFIX}[MODEL] fallback sizes", extra={"extra": {
-                    "full": len(full_text or ""), "summary": len(summary_text or ""),
-                    "h2_sections": sum(1 for ln in full_text.splitlines() if ln.startswith('## '))
-                }})
+                self.logger.info(
+                    f"{LOG_PREFIX}[MODEL] fallback sizes",
+                    extra={"extra": {"full": len(full_text or ""), "summary": len(summary_text or "")}}
+                )
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[MODEL] fallback error: {e}", exc_info=True)
             full_text = full_text or f"{full_h1}\n\n(No participant texts due to error)"
             summary_text = summary_text or f"{summ_h1}\n\n(No participant summaries due to error)"
 
-        # --- 3) Artifact ---
+        # --- 3) Artifact (with raw payload) ---
         try:
-            self.logger.info(f"{LOG_PREFIX}[MODEL] done", extra={"extra": {"model_id": mid, "full_chars": len(full_text or ""), "summary_chars": len(summary_text or "")}})
-            return self._make_artifact(node_id=mid, node_name=mname, level="model", full=full_text, summary=summary_text)
+            self.logger.info(
+                f"{LOG_PREFIX}[MODEL] done",
+                extra={"extra": {"full_chars": len(full_text or ""), "summary_chars": len(summary_text or "")}}
+            )
+            return self._make_artifact(
+                node_id=mid, node_name=mname, level="model",
+                full=full_text, summary=summary_text,
+                raw=payload
+            )
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[MODEL] artifact build error: {e}", exc_info=True)
-            return self._make_artifact(node_id=mid, node_name=mname, level="model", full=(full_text or ""), summary=(summary_text or ""))
+            return self._make_artifact(
+                node_id=mid, node_name=mname, level="model",
+                full=(full_text or ""), summary=(summary_text or ""),
+                raw=payload
+            )
 
     def build_participant_texts(self, ctx: dict, process_artifacts: list[dict] | None = None) -> dict:
         """
         Participant-level aggregation with LLM (fallback to simple concatenation).
+        Change: LLM receives single JSON payload; the same payload is stored in artifact.raw.
         """
         try:
             # --- 0) Entry & indices ---
@@ -234,58 +252,56 @@ class Builder:
                 for k, v in pidx.items():
                     proc_id = str(k).strip() if k is not None else ""
                     nm = (v.get("name") if isinstance(v, dict) else v) or ""
-                    nm = nm.strip() if isinstance(nm, str) else ""
-                    if proc_id and nm:
-                        proc_name_index[proc_id] = nm
+                    if proc_id:
+                        proc_name_index[proc_id] = (nm or "").strip()
 
-            for p in (ctx.get("processes") or []):
-                if not isinstance(p, dict):
-                    continue
-                iid = p.get("id")
-                nm  = p.get("name")
-                proc_id = str(iid).strip() if iid is not None else ""
-                if proc_id and nm:
-                    proc_name_index[proc_id] = (nm or "").strip()
-
-            arts = process_artifacts or []
-            self.logger.info(f"{LOG_PREFIX}[PARTICIPANT] start", extra={"extra": {"participant_id": pid, "name": pname, "processes": len(arts)}})
-
-            def _proc_name(art: dict) -> str:
-                proc_id = str(art.get("node_id") or "").strip()
-                return proc_name_index.get(proc_id) or f"Process {proc_id or '?'}"
-
-            arts_sorted = sorted(arts, key=lambda a: (_proc_name(a).lower(), str(a.get("node_id") or "")))
-            self.logger.debug(f"{LOG_PREFIX}[PARTICIPANT] sorted_proc_ids={[a.get('node_id') for a in arts_sorted]}")
+            arts_sorted = sorted(
+                (process_artifacts or []),
+                key=lambda a: ((proc_name_index.get(str(a.get("node_id") or "")) or "").lower(), str(a.get("node_id") or ""))
+            )
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[PARTICIPANT] init/index error: {e}", exc_info=True)
             full_text = f"### {ctx.get('participant', {}).get('name', 'Participant')}\n(No process texts due to error)"
             summary_text = f"### {ctx.get('participant', {}).get('name', 'Participant')}\n(No process summaries due to error)"
-            return self._make_artifact(node_id=pid, node_name=pname, level="participant", full=full_text, summary=summary_text)
+            return self._make_artifact(
+                node_id=pid, node_name=pname, level="participant",
+                full=full_text, summary=summary_text,
+                raw={"raw_prop": "raw_payload", "raw_context": {"error": "init/index error"}}
+            )
 
-        # --- 1) LLM path ---
+        # --- 1) LLM path with single JSON payload ---
         full_text, summary_text = "", ""
+        payload = None
         try:
             if len(arts_sorted) >= 1 and getattr(self, "context_writer", None) is not None:
                 proc_payload = [{
                     "id": str(a.get("node_id") or "").strip(),
-                    "name": _proc_name(a),
+                    "name": proc_name_index.get(str(a.get("node_id") or ""), f"Process {a.get('node_id')}"),
                     "full_text": (a.get("full_text") or "").strip(),
                     "summary_text": (a.get("summary_text") or "").strip(),
                 } for a in arts_sorted]
 
-                full_text, summary_text = self.context_writer.generate_participant_context(
-                    participant={"id": pid, "name": pname},
-                    processes=proc_payload,
+                payload = {
+                    "participant": {"id": pid, "name": pname},
+                    "processes": proc_payload
+                }
+
+                full_text, summary_text = self.context_writer.generate_participant_context(payload)  
+
+                full_text = (full_text or "").strip()
+                summary_text = (summary_text or "").strip()
+
+                self.logger.info(
+                    f"{LOG_PREFIX}[PARTICIPANT] LLM sizes",
+                    extra={"extra": {"full": len(full_text or ""), "summary": len(summary_text or "")}}
                 )
-
-                self.logger.info(f"{LOG_PREFIX}[PARTICIPANT] LLM sizes", extra={"extra": {"full": len(full_text or ""), "summary": len(summary_text or "")}})
-                self.logger.debug(f"{LOG_PREFIX}[PARTICIPANT] LLM FULL (trunc): {(full_text if len(full_text) <= 2000 else (full_text[:2000] + '...'))}")
-                self.logger.debug(f"{LOG_PREFIX}[PARTICIPANT] LLM SUMMARY: {summary_text}")
-
-                if not (full_text and summary_text):
-                    self.logger.warning(f"{LOG_PREFIX}[PARTICIPANT] LLM outputs empty; fallback will be used.")
+                self.logger.debug(f"{LOG_PREFIX}[PARTICIPANT] FULL: %s", full_text if len(full_text) <= 2000 else (full_text[:2000] + "..."))
+                self.logger.debug(f"{LOG_PREFIX}[PARTICIPANT] SUMMARY: %s", summary_text)
             else:
-                self.logger.info(f"{LOG_PREFIX}[PARTICIPANT] LLM skipped", extra={"extra": {"processes": len(arts_sorted), "context_writer": type(getattr(self, 'context_writer', None)).__name__}})
+                self.logger.info(
+                    f"{LOG_PREFIX}[PARTICIPANT] LLM skipped",
+                    extra={"extra": {"writer": type(getattr(self, 'context_writer', None)).__name__}}
+                )
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[PARTICIPANT] LLM path error: {e}", exc_info=True)
             full_text, summary_text = "", ""
@@ -295,7 +311,7 @@ class Builder:
             if not (full_text and summary_text):
                 full_lines, summ_lines = [], []
                 for art in arts_sorted:
-                    pn = _proc_name(art)
+                    pn = proc_name_index.get(str(art.get("node_id") or ""), f"Process {art.get('node_id')}")
                     f = (art.get("full_text") or "").strip()
                     s = (art.get("summary_text") or "").strip()
 
@@ -312,24 +328,39 @@ class Builder:
                 full_text = "\n\n".join(full_lines).strip() if full_lines else f"### {pname}\n(No process texts)"
                 summary_text = "\n\n".join(summ_lines).strip() if summ_lines else f"### {pname}\n(No process summaries)"
 
-                self.logger.info(f"{LOG_PREFIX}[PARTICIPANT] fallback sizes", extra={"extra": {"full": len(full_text or ""), "summary": len(summary_text or "")}})
+                self.logger.info(
+                    f"{LOG_PREFIX}[PARTICIPANT] fallback sizes",
+                    extra={"extra": {"full": len(full_text or ""), "summary": len(summary_text or "")}}
+                )
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[PARTICIPANT] fallback error: {e}", exc_info=True)
             full_text = full_text or f"### {pname}\n(No process texts due to error)"
             summary_text = summary_text or f"### {pname}\n(No process summaries due to error)"
 
-        # --- 3) Artifact ---
+        # --- 3) Artifact (with raw payload) ---
         try:
             sections = sum(1 for ln in full_text.splitlines() if ln.startswith("### "))
-            self.logger.info(f"{LOG_PREFIX}[PARTICIPANT] done", extra={"extra": {"participant_id": pid, "full_chars": len(full_text or ""), "summary_chars": len(summary_text or ""), "h3_sections": sections}})
-            return self._make_artifact(node_id=pid, node_name=pname, level="participant", full=full_text, summary=summary_text)
+            self.logger.info(
+                f"{LOG_PREFIX}[PARTICIPANT] done",
+                extra={"extra": {"full_chars": len(full_text or ""), "summary_chars": len(summary_text or ""), "h3_sections": sections}}
+            )
+            return self._make_artifact(
+                node_id=pid, node_name=pname, level="participant",
+                full=full_text, summary=summary_text,
+                raw=payload
+            )
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[PARTICIPANT] artifact build error: {e}", exc_info=True)
-            return self._make_artifact(node_id=pid, node_name=pname, level="participant", full=(full_text or ""), summary=(summary_text or ""))
+            return self._make_artifact(
+                node_id=pid, node_name=pname, level="participant",
+                full=(full_text or ""), summary=(summary_text or ""),
+                raw=payload
+            )
 
     def build_process_texts(self, ctx: dict, larts: Dict[str, Dict[str, Any]] | None = None) -> dict:
         """
         Process build entry: extract signals → LLM summarization (fallback on failure) → return artifact.
+        Change: store extracted signals `sig` as raw_context with raw_prop='raw_signals'.
         """
         # --- 0) Extract signals ---
         try:
@@ -342,44 +373,41 @@ class Builder:
             proc_raw = ctx.get("process")
             proc = proc_raw if isinstance(proc_raw, dict) else (proc_raw[0] if isinstance(proc_raw, list) and proc_raw else {})
             if not isinstance(proc, dict):
-                self.logger.warning(f"{LOG_PREFIX}[PROCESS][SIG] ctx['process'] unexpected type={type(proc_raw).__name__}; defaulting to {{}}")
+                self.logger.warning(f"{LOG_PREFIX}[PROCESS][SIG] ctx['process'] unexpected type; defaulting to {{}}")
                 proc = {}
             pid = proc.get("id")
-            pname = proc.get("name") or f"Process {pid}"
-            sig = {"id": pid or "unknown", "name": pname or "unknown"}
+            pname = (proc.get("name") or f"Process {pid}").strip()
+            sig = {"id": pid, "name": pname}  # minimal
 
-        # --- 1) Generate (LLM) ---
-        full, summary = "", ""
+        # --- 1) LLM generation (unchanged) ---
         try:
-            out = self.context_writer.generate_process_context(sig, larts)
-            if isinstance(out, tuple) and len(out) == 2:
-                full, summary = out
-            else:
-                raise ValueError("generate_process_context returned a non-(full, summary) shape")
-
-            self.logger.info(f"{LOG_PREFIX}[PROCESS] gen ok", extra={"extra": {"full": len(full or ""), "summary": len(summary or "")}})
-            self.logger.debug(f"{LOG_PREFIX}[PROCESS] full_text: {(full if isinstance(full, str) and len(full) <= 2000 else (str(full)[:2000] + '...'))}")
-            self.logger.debug(f"{LOG_PREFIX}[PROCESS] summary_text: {summary}")
-
-            if not (full and summary):
-                self.logger.warning(f"{LOG_PREFIX}[PROCESS] empty outputs from generator")
-                return
+            full, summary = self.context_writer.generate_process_context(sig, larts)
+            full = (full or "").strip()
+            summary = (summary or "").strip()
         except Exception as e:
-            self.logger.error(f"{LOG_PREFIX}[PROCESS] generate_process_context error: {e}", exc_info=True)
-            return
+            self.logger.error(f"{LOG_PREFIX}[PROCESS] LLM error: {e}", exc_info=True)
+            full = f"### {pname}\n(No process texts due to error)"
+            summary = f"### {pname}\n(No process summaries due to error)"
 
-        # --- 2) Artifact ---
+        # --- 2) Artifact with raw signals ---
         try:
-            art = self._make_artifact(node_id=pid, node_name=pname, level="process", full=(full or ""), summary=(summary or ""))
-            self.logger.info(f"{LOG_PREFIX}[PROCESS] done", extra={"extra": {"node_id": pid, "full": len(full or ""), "summary": len(summary or "")}})
-            return art
+            return self._make_artifact(
+                node_id=pid, node_name=pname, level="process",
+                full=full, summary=summary,
+                raw=sig
+            )
         except Exception as e:
-            self.logger.error(f"{LOG_PREFIX}[PROCESS] artifact build error: {e}", exc_info=True)
-            return self._make_artifact(node_id=pid, node_name=pname, level="process", full=(full or ""), summary=(summary or ""))
+            self.logger.error(f"{LOG_PREFIX}[PROCESS] artifact error: {e}", exc_info=True)
+            return self._make_artifact(
+                node_id=pid, node_name=pname, level="process",
+                full=(full or ""), summary=(summary or ""),
+                raw=(sig or "")
+            )
 
     def build_lane_texts(self, ctx: dict) -> dict:
         """
         Lane build entry: extract lane signals → LLM summarization (fallback on failure) → return artifact.
+        Change: store extracted signals `sig` as raw_context with raw_prop='raw_signals'.
         """
         try:
             sig = self._extract_signals_lane(ctx)
@@ -391,21 +419,37 @@ class Builder:
             lane_raw = ctx.get("lane")
             lane = lane_raw if isinstance(lane_raw, dict) else (lane_raw[0] if isinstance(lane_raw, list) and lane_raw else {})
             if not isinstance(lane, dict):
-                self.logger.warning(f"{LOG_PREFIX}[LANE][SIG] ctx['lane'] unexpected type={type(lane_raw).__name__}; defaulting to {{}}")
+                self.logger.warning(f"{LOG_PREFIX}[LANE][SIG] ctx['lane'] unexpected type; defaulting to {{}}")
                 lane = {}
             lid = lane.get("id")
-            lname = lane.get("name") or f"Process {lid}"
-            sig = {"id": lid or "unknown", "name": lname or "unknown"}
+            lname = (lane.get("name") or f"Lane {lid}").strip()
+            sig = {"id": lid, "name": lname}  # minimal
 
+        # --- 1) LLM generation (unchanged) ---
         try:
             full, summary = self.context_writer.generate_lane_context(sig)
-            if not (full and summary):
-                self.logger.warning(f"{LOG_PREFIX}[LANE] empty outputs from generator")
+            full = (full or "").strip()
+            summary = (summary or "").strip()
         except Exception as e:
-            self.logger.error(f"{LOG_PREFIX}[LANE] generate_lane_context error: {e}", exc_info=True)
-            full, summary = "", ""
+            self.logger.error(f"{LOG_PREFIX}[LANE] LLM error: {e}", exc_info=True)
+            full = f"### {lname}\n(No lane texts due to error)"
+            summary = f"### {lname}\n(No lane summaries due to error)"
 
-        return self._make_artifact(node_id=lid, node_name=lname, level="lane", full=full, summary=summary)
+        # --- 2) Artifact with raw signals ---
+        try:
+            return self._make_artifact(
+                node_id=lid, node_name=lname, level="lane",
+                full=full, summary=summary,
+                raw=sig
+            )
+        except Exception as e:
+            self.logger.error(f"{LOG_PREFIX}[LANE] artifact error: {e}", exc_info=True)
+            return self._make_artifact(
+                node_id=lid, node_name=lname, level="lane",
+                full=(full or ""), summary=(summary or ""),
+                raw=sig
+            )
+
 
     def build_flownode_texts(
         self,
@@ -457,7 +501,7 @@ class Builder:
 
         # Names and metrics
         try:
-            full_prop, summary_prop, emb_prop = self.PROP_MAP
+            raw_prop, full_prop, summary_prop, emb_prop = self.PROP_MAP
             preds = len(sig.get("predecessors", []) or [])
             succs = len(sig.get("successors", []) or [])
             msg_in = len(sig.get("messages", {}).get("in") or [])
@@ -468,7 +512,7 @@ class Builder:
             }})
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[NODE] metrics log failed: {e}", exc_info=True)
-            full_prop, summary_prop, emb_prop = self.PROP_MAP
+            raw_prop, full_prop, summary_prop, emb_prop = self.PROP_MAP
 
         # Artifact
         art = {
@@ -1433,17 +1477,50 @@ class Builder:
         text = re.sub(r"\s+", " ", text).strip()
         return text
 
-    def _make_artifact(self, node_id: int, node_name: str, level: str, full: str, summary: str) -> dict:
-        full_prop, sum_prop, emb_prop = self.PROP_MAP
-        return {
-            "node_id": node_id,
-            "node_name": node_name,
-            "full_prop": full_prop,
-            "summary_prop": sum_prop,
-            "emb_prop": emb_prop,
-            "full_text": self._finalize(full, joiner="\n\n"),
-            "summary_text": self._finalize(summary, joiner=" "),
-        }
+    def _make_artifact(
+        self,
+        node_id: int,
+        node_name: str,
+        level: str,
+        full: str,
+        summary: str,
+        raw: dict | None = None,
+    ) -> dict:
+        """
+        Build a standardized artifact dict for Orchestrator.save_texts_and_vectors.
+        """
+        try:
+            raw_prop, full_prop, sum_prop, emb_prop = self.PROP_MAP
+            art = {
+                "node_id": node_id,
+                "node_name": node_name,
+                "raw_prop": raw_prop,
+                "full_prop": full_prop,
+                "summary_prop": sum_prop,
+                "emb_prop": emb_prop,
+                "raw_text": json.dumps(raw, ensure_ascii=False),
+                "full_text": self._finalize(full, joiner="\n\n"),
+                "summary_text": self._finalize(summary, joiner=" "),
+            }
+
+            self.logger.info(
+                json.dumps(
+                    {
+                        "tag": f"{LOG_PREFIX}[ARTIFACT]",
+                        "node_id": node_id,
+                        "level": level,
+                        "raw_prop": raw_prop,
+                        "raw": raw,  # log as-is; fallback to str for non-serializable objects
+                    },
+                    ensure_ascii=False,
+                    default=str,  # prevent serialization errors
+                )
+            )
+    
+        except Exception as e:
+            self.logger.error(f"{LOG_PREFIX}[ARTIFACT] raw attach error: {e}", exc_info=True)
+        return art
+
 
     @staticmethod
     def _truncate(text: str, limit: int) -> str:
