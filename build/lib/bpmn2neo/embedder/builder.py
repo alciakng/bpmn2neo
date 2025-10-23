@@ -81,6 +81,7 @@ class Builder:
     # =========================
     def build_model_texts(
         self,
+        model_key: str,
         ctx: dict,
         participant_artifacts: list[dict] | None = None,
     ) -> dict:
@@ -223,6 +224,7 @@ class Builder:
                 extra={"extra": {"full_chars": len(full_text or ""), "summary_chars": len(summary_text or "")}}
             )
             return self._make_artifact(
+                model_key=model_key,
                 node_id=mid, node_name=mname, level="model",
                 full=full_text, summary=summary_text,
                 raw=payload
@@ -230,12 +232,13 @@ class Builder:
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[MODEL] artifact build error: {e}", exc_info=True)
             return self._make_artifact(
+                model_key=model_key,
                 node_id=mid, node_name=mname, level="model",
                 full=(full_text or ""), summary=(summary_text or ""),
                 raw=payload
             )
 
-    def build_participant_texts(self, ctx: dict, process_artifacts: list[dict] | None = None) -> dict:
+    def build_participant_texts(self, model_key: str,ctx: dict, process_artifacts: list[dict] | None = None) -> dict:
         """
         Participant-level aggregation with LLM (fallback to simple concatenation).
         Change: LLM receives single JSON payload; the same payload is stored in artifact.raw.
@@ -264,6 +267,7 @@ class Builder:
             full_text = f"### {ctx.get('participant', {}).get('name', 'Participant')}\n(No process texts due to error)"
             summary_text = f"### {ctx.get('participant', {}).get('name', 'Participant')}\n(No process summaries due to error)"
             return self._make_artifact(
+                model_key=model_key,
                 node_id=pid, node_name=pname, level="participant",
                 full=full_text, summary=summary_text,
                 raw={"raw_prop": "raw_payload", "raw_context": {"error": "init/index error"}}
@@ -345,6 +349,7 @@ class Builder:
                 extra={"extra": {"full_chars": len(full_text or ""), "summary_chars": len(summary_text or ""), "h3_sections": sections}}
             )
             return self._make_artifact(
+                model_key=model_key,
                 node_id=pid, node_name=pname, level="participant",
                 full=full_text, summary=summary_text,
                 raw=payload
@@ -352,12 +357,13 @@ class Builder:
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[PARTICIPANT] artifact build error: {e}", exc_info=True)
             return self._make_artifact(
+                model_key=model_key,
                 node_id=pid, node_name=pname, level="participant",
                 full=(full_text or ""), summary=(summary_text or ""),
                 raw=payload
             )
 
-    def build_process_texts(self, ctx: dict, larts: Dict[str, Dict[str, Any]] | None = None) -> dict:
+    def build_process_texts(self, model_key: str, ctx: dict, larts: Dict[str, Dict[str, Any]] | None = None) -> dict:
         """
         Process build entry: extract signals → LLM summarization (fallback on failure) → return artifact.
         Change: store extracted signals `sig` as raw_context with raw_prop='raw_signals'.
@@ -392,6 +398,7 @@ class Builder:
         # --- 2) Artifact with raw signals ---
         try:
             return self._make_artifact(
+                model_key=model_key,
                 node_id=pid, node_name=pname, level="process",
                 full=full, summary=summary,
                 raw=sig
@@ -399,12 +406,13 @@ class Builder:
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[PROCESS] artifact error: {e}", exc_info=True)
             return self._make_artifact(
+                model_key=model_key,
                 node_id=pid, node_name=pname, level="process",
                 full=(full or ""), summary=(summary or ""),
                 raw=(sig or "")
             )
 
-    def build_lane_texts(self, ctx: dict) -> dict:
+    def build_lane_texts(self, model_key:str, ctx: dict) -> dict:
         """
         Lane build entry: extract lane signals → LLM summarization (fallback on failure) → return artifact.
         Change: store extracted signals `sig` as raw_context with raw_prop='raw_signals'.
@@ -438,6 +446,7 @@ class Builder:
         # --- 2) Artifact with raw signals ---
         try:
             return self._make_artifact(
+                model_key=model_key,
                 node_id=lid, node_name=lname, level="lane",
                 full=full, summary=summary,
                 raw=sig
@@ -445,6 +454,7 @@ class Builder:
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[LANE] artifact error: {e}", exc_info=True)
             return self._make_artifact(
+                model_key=model_key,
                 node_id=lid, node_name=lname, level="lane",
                 full=(full or ""), summary=(summary or ""),
                 raw=sig
@@ -453,6 +463,7 @@ class Builder:
 
     def build_flownode_texts(
         self,
+        model_key:str,
         node_ctx: Dict[str, Any],
         process_ctx:Dict[str, Any],
         *,
@@ -516,6 +527,7 @@ class Builder:
 
         # Artifact
         art = {
+            "model_key":model_key,
             "node_id": node_id,
             "full_prop": full_prop,
             "emb_prop": emb_prop,
@@ -529,7 +541,7 @@ class Builder:
                 props = {full_prop: full_text}
                 if vector is not None:
                     props[emb_prop] = vector
-                self._persist_props(node_id, props)
+                self._persist_props(node_id, model_key, props)
             except Exception as e:
                 self.logger.error(f"{LOG_PREFIX}[NODE] persistence error: {e}", exc_info=True)
 
@@ -1215,19 +1227,19 @@ class Builder:
     # ---------------------------------------------------------
     # Persistence helper
     # ---------------------------------------------------------
-    def _persist_props(self, node_id: int, props: Dict[str, Any]) -> None:
+    def _persist_props(self, node_id: int, model_key: str, props: Dict[str, Any]) -> None:
         """
         Persist properties onto a node by internal id using SET += map.
         """
         if node_id is None or not props:
             return
         cypher = """
-        MATCH (n) WHERE id(n)=$id
+        MATCH (n) WHERE n.id=$id and modelKey=$modelKey
         SET n += $props
         RETURN id(n) AS id
         """
         try:
-            self.repository.execute_single_query(cypher, {"id": node_id, "props": props})
+            self.repository.execute_single_query(cypher, {"id": node_id, "model_key" : model_key, "props": props})
             self.logger.info(f"{LOG_PREFIX}[PERSIST] ok", extra={"extra": {"node_id": node_id, "keys": list(props.keys())}})
         except Exception as e:
             self.logger.error(f"{LOG_PREFIX}[PERSIST] fail: node_id={node_id}, err={e}")
@@ -1479,6 +1491,7 @@ class Builder:
 
     def _make_artifact(
         self,
+        model_key: str,
         node_id: int,
         node_name: str,
         level: str,

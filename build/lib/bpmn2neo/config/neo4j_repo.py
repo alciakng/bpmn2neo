@@ -22,6 +22,7 @@ class Neo4jRepository:
             )
             # Verify connectivity early
             self.driver.verify_authentication()
+            self._ensure_schema()
             self.logger.info("Neo4j driver initialized", extra={"extra": {"uri": cfg.uri, "db": cfg.database}})
         except Exception as e:
             self.logger.error("Neo4j driver init failed", extra={"extra": {"err": str(e)}})
@@ -33,6 +34,58 @@ class Neo4jRepository:
             self.logger.info("Neo4j driver closed")
         except Exception as e:
             self.logger.error("Neo4j driver close failed", extra={"extra": {"err": str(e)}})
+
+    def _ensure_schema(self) -> None:
+        """
+        Create constraints/indexes once before any load.
+
+        Notes:
+        - Uses IF NOT EXISTS so repeated calls are safe (no-ops).
+        - Uses named constraints for easier ops/maintenance.
+        - Avoids wrapping all DDL in one explicit transaction (neo4j best-effort).
+        - Gracefully handles permission/feature issues and keeps the app running.
+        """
+        self.logger.info("Ensuring Neo4j schema (constraints/indexes)...")
+
+        # IMPORTANT:
+        # - Keep label names consistent with your data model.
+        # - If your data already uses an accidental label (e.g., 'DataRefernce'),
+        #   either fix the data generator or add a second constraint for that label.
+        stmts = [
+            "CREATE CONSTRAINT bpmn_model_nodekey     IF NOT EXISTS FOR (n:BPMNModel)      REQUIRE (n.id, n.modelKey) IS NODE KEY",
+            "CREATE CONSTRAINT participant_nodekey    IF NOT EXISTS FOR (n:Participant)     REQUIRE (n.id, n.modelKey) IS NODE KEY",
+            "CREATE CONSTRAINT process_nodekey        IF NOT EXISTS FOR (n:Process)         REQUIRE (n.id, n.modelKey) IS NODE KEY",
+            "CREATE CONSTRAINT lane_nodekey           IF NOT EXISTS FOR (n:Lane)            REQUIRE (n.id, n.modelKey) IS NODE KEY",
+            "CREATE CONSTRAINT activity_nodekey       IF NOT EXISTS FOR (n:Activity)        REQUIRE (n.id, n.modelKey) IS NODE KEY",
+            "CREATE CONSTRAINT event_nodekey          IF NOT EXISTS FOR (n:Event)           REQUIRE (n.id, n.modelKey) IS NODE KEY",
+            "CREATE CONSTRAINT gateway_nodekey        IF NOT EXISTS FOR (n:Gateway)         REQUIRE (n.id, n.modelKey) IS NODE KEY",
+            "CREATE CONSTRAINT data_nodekey           IF NOT EXISTS FOR (n:Data)            REQUIRE (n.id, n.modelKey) IS NODE KEY",
+            # Prefer the corrected label 'DataReference'. If legacy data used a misspelled label,
+            # either migrate the data or add another constraint specifically for that label.
+            "CREATE CONSTRAINT dataref_nodekey        IF NOT EXISTS FOR (n:DataReference)   REQUIRE (n.id, n.modelKey) IS NODE KEY",
+            # If your model truly uses 'GROUP' as a label, keep this. Otherwise align casing (e.g., 'Group').
+            "CREATE CONSTRAINT group_nodekey          IF NOT EXISTS FOR (n:GROUP)           REQUIRE (n.id, n.modelKey) IS NODE KEY",
+            "CREATE CONSTRAINT textanno_nodekey       IF NOT EXISTS FOR (n:TextAnnotation)  REQUIRE (n.id, n.modelKey) IS NODE KEY",
+            # Optional: add secondary indexes on modelKey when you frequently filter/cleanup by modelKey
+            # "CREATE INDEX activity_modelkey_idx IF NOT EXISTS FOR (n:Activity) ON (n.modelKey)",
+        ]
+
+        # Run each DDL with autocommit; do not fail the app if one statement is not allowed.
+        for cypher in stmts:
+            try:
+                self.execute_single_query(cypher)
+            except Exception as e:
+                # Permissions or version compatibility issues should not crash the app.
+                self.logger.warning("Schema DDL skipped/failed: %s | %s", cypher, str(e))
+
+        # Wait for index/constraint online if the DB supports it.
+        try:
+            self.execute_single_query("CALL db.awaitIndexes()")
+        except Exception as e:
+            self.logger.warning("db.awaitIndexes() failed/unsupported: %s", str(e))
+
+        self._schema_ready = True
+        self.logger.info("Neo4j schema ensured.")
 
     def execute_single_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Execute a single Cypher query and return list of dict records."""
@@ -173,10 +226,11 @@ class CypherBuilder:
         node_id = CypherBuilder.escape_string(node_data['id'])
         node_name = CypherBuilder.escape_string(node_data.get('name', '') or node_data['id'])
         props = node_data.get('properties', {})
+        model_key = props.get('modelKey',{})
         props_str = CypherBuilder.format_properties(props, "n")
         
         return f"""
-MERGE (n:{node_type} {{id:'{node_id}'}})
+MERGE (n:{node_type} {{id:'{node_id}', modelKey:'{model_key}'}})
 SET n.name = '{node_name}',
     {props_str}
 """.strip()
@@ -188,10 +242,11 @@ SET n.name = '{node_name}',
         target = CypherBuilder.escape_string(rel_data['target'])
         rel_type = rel_data['type']
         props = rel_data.get('properties', {})
+        model_key = props.get('modelKey',{})
         props_str = CypherBuilder.format_properties(props, "r")
         
         return f"""
-MATCH (a {{id:'{source}'}}), (b {{id:'{target}'}})
+MATCH (a {{id:'{source}'}}), (b {{id:'{target}', modelKey:'{model_key}'}})
 CREATE (a)-[r:{rel_type}]->(b)
 SET {props_str}
 """.strip()

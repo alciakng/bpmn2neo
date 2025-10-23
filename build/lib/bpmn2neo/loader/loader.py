@@ -71,7 +71,7 @@ class Loader:
             if not hasattr(self, "cleanup_models"):
                 logger.error("[LOADER] cleanup_models not found on Loader")
                 raise ConfigError("cleanup_models is not available on Loader")
-            deleted = self.cleanup_models([model_key])  # 기존에 정의되어 있는 함수를 그대로 사용
+            deleted = self.cleanup_models([model_key])  
             logger.info("[LOADER] cleanup ok model_key=%s deleted=%s", model_key, deleted)
         except (Neo4jRepositoryError, ConfigError):
             raise
@@ -81,12 +81,11 @@ class Loader:
 
         # --- 2) Delegate to existing loader flow that parses & ingests ---
         try:
-            # NOTE: self.load_bpmn_file(...)는 기존에 구현되어 있는 "Parser 초기화 후 적재" 루틴입니다.
             if not hasattr(self, "load_bpmn_file"):
                 logger.error("[LOADER] load_bpmn_file not found on Loader")
                 raise ConfigError("load_bpmn_file is not available on Loader")
 
-            result = self.load_bpmn_file(bpmn_path, model_key)  # 기존 함수 시그니처에 맞춰 전달
+            result = self.load_bpmn_file(bpmn_path, model_key) 
             logger.info("[LOADER] load done model_key=%s result=%s", model_key, result)
             return result if isinstance(result, dict) else {"model_key": model_key, "status": "ok"}
         except (BpmnParseError, Neo4jRepositoryError, ConfigError, Bpmn2NeoError):

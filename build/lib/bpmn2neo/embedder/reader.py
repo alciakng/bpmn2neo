@@ -1176,7 +1176,7 @@ class Reader:
         row = rows[0] if isinstance(rows, list) else rows
         return row.get("subprocess_paths") or []
 
-    def update_node_properties(self, node_id: str, props: Dict[str, Any]) -> int:
+    def update_node_properties(self, node_id: str, modelKey: str, props: Dict[str, Any]) -> int:
         """
         [SAVE] Apply a partial property map to a node by domain id property `id`.
         Uses 'SET n += $props' so that only provided keys are updated.
@@ -1189,7 +1189,7 @@ class Reader:
 
             self.logger.debug("[SAVE] upsert start", extra={"extra": {"id": node_id, "keys": list(props.keys())}})
             q = """
-            MATCH (n) WHERE n.id = $id
+            MATCH (n) WHERE n.id = $id and n.modelKey = $modelKey
             SET n += $props
             RETURN n.id AS id
             """
@@ -1199,7 +1199,7 @@ class Reader:
             self.logger.debug("[SAVE] props preview", extra={"extra": {"id": node_id, "preview": preview}})
 
             try:
-                rows = self.repository.execute_single_query(q, {"id": node_id, "props": props})
+                rows = self.repository.execute_single_query(q, {"id": node_id, "modelKey":modelKey, "props": props})
             except Exception:
                 self.logger.exception("[SAVE] update query failed.")
                 return 0
