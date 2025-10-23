@@ -1505,6 +1505,7 @@ class Builder:
         try:
             raw_prop, full_prop, sum_prop, emb_prop = self.PROP_MAP
             art = {
+                "model_key":model_key,
                 "node_id": node_id,
                 "node_name": node_name,
                 "raw_prop": raw_prop,

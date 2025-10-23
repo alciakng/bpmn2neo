@@ -179,6 +179,7 @@ class Orchestrator:
                         self.logger.info(f"{LOG_PREFIX}[NODE] start", extra={"extra": {"node_id": nid}})
                         n_ctx = self.reader.fetch_flownode_context(nid)
                         n_art = self.builder.build_flownode_texts(
+                            model_key=model_key,
                             node_ctx=n_ctx,
                             process_ctx=p_ctx,
                             compute_vector=True,
@@ -207,7 +208,7 @@ class Orchestrator:
                     try:
                         self.logger.info(f"{LOG_PREFIX}[LANE] start", extra={"extra": {"lane_id": lid}})
                         l_ctx = self.reader.fetch_lane_context(lid)
-                        l_art = self.builder.build_lane_texts(ctx=l_ctx)
+                        l_art = self.builder.build_lane_texts(model_key=model_key,ctx=l_ctx)
                         self.save_texts_and_vectors([l_art])
                         lane_artifacts[lid] = l_art
                         summary["counts"]["lanes"] += 1
@@ -220,7 +221,7 @@ class Orchestrator:
             # 3) Process
             try:
                 self.logger.info(f"{LOG_PREFIX}[PROCESS] build start", extra={"extra": {"process_id": proc_id}})
-                p_art = self.builder.build_process_texts(ctx=p_ctx, larts=lane_artifacts)
+                p_art = self.builder.build_process_texts(model_key=model_key, ctx=p_ctx, larts=lane_artifacts)
                 self.save_texts_and_vectors([p_art])
                 process_artifacts[proc_id] = p_art
                 summary["counts"]["processes"] += 1
@@ -245,6 +246,7 @@ class Orchestrator:
                 )
 
                 part_art = self.builder.build_participant_texts(
+                    model_key=model_key,
                     ctx={"participant": p, "processes": [{"id": i, "name": (proc_name_index.get(i) if 'proc_name_index' in locals() else None)} for i in proc_ids]},
                     process_artifacts=arts,
                 )
@@ -266,6 +268,7 @@ class Orchestrator:
         try:
             self.logger.info(f"{LOG_PREFIX}[MODEL] build start", extra={"extra": {"participants": len(participants)}})
             model_art = self.builder.build_model_texts(
+                model_key=model_key,
                 ctx={"model": model_meta, "participants": participants},
                 participant_artifacts=participant_artifacts,
             )
@@ -296,6 +299,7 @@ class Orchestrator:
             try:
                 node_id = art["node_id"]
 
+                model_key      = art.get("model_key")
                 raw_prop        = art.get("raw_prop")
                 full_prop       = art.get("full_prop")
                 sum_prop        = art.get("summary_prop")
@@ -333,7 +337,7 @@ class Orchestrator:
 
                 # Persist via Reader
                 try:
-                    updated = self.reader.update_node_properties(node_id, props)
+                    updated = self.reader.update_node_properties(node_id, model_key, props)
                 except Exception as e_save:
                     self.logger.exception(f"{LOG_PREFIX}[SAVE] update failed: id={node_id} err={e_save}")
                     continue

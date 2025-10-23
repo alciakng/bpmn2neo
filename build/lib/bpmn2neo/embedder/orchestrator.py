@@ -299,6 +299,7 @@ class Orchestrator:
             try:
                 node_id = art["node_id"]
 
+                model_key      = art.get("model_key")
                 raw_prop        = art.get("raw_prop")
                 full_prop       = art.get("full_prop")
                 sum_prop        = art.get("summary_prop")
@@ -336,7 +337,7 @@ class Orchestrator:
 
                 # Persist via Reader
                 try:
-                    updated = self.reader.update_node_properties(node_id,props)
+                    updated = self.reader.update_node_properties(node_id, model_key, props)
                 except Exception as e_save:
                     self.logger.exception(f"{LOG_PREFIX}[SAVE] update failed: id={node_id} err={e_save}")
                     continue
