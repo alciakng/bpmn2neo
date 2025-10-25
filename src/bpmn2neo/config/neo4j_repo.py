@@ -246,7 +246,7 @@ SET n.name = '{node_name}',
         props_str = CypherBuilder.format_properties(props, "r")
         
         return f"""
-MATCH (a {{id:'{source}, modelKey:'{model_key}'}}), (b {{id:'{target}', modelKey:'{model_key}'}})
+MATCH (a {{id:'{source}', modelKey:'{model_key}'}}), (b {{id:'{target}', modelKey:'{model_key}'}})
 CREATE (a)-[r:{rel_type}]->(b)
 SET {props_str}
 """.strip()
