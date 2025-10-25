@@ -281,6 +281,89 @@ class Orchestrator:
         self.logger.info(f"{LOG_PREFIX}[SUMMARY] done", extra={"extra": summary["counts"]})
         return summary
 
+    def embed_flownode_only(self, model_key: str) -> Dict[str, Any]:
+        """
+        Light embedding: build & persist vectors for FlowNodes only.
+        Skips lanes, processes, participants, and model-level artifacts.
+        Returns summary with flownode counts and errors (if any).
+        """
+        summary = {
+            "model_key": model_key,
+            "counts": {"flownodes": 0},
+            "errors": [],
+        }
+        try:
+            # 0) Fetch overview: participants and processes for the model
+            self.logger.info("[Orchestration][LIGHT] start model_key=%s", model_key)
+            overview = self.reader.fetch_participants_and_processes(model_key)
+            participants = overview.get("participants") or []
+
+            # 1) Collect unique process ids across all participants
+            proc_ids: List[int] = []
+            try:
+                seen: Set[int] = set()
+                for p in participants:
+                    for pr in (p.get("processes") or []):
+                        pr_id = pr.get("id")
+                        if pr_id is None:
+                            continue
+                        pid_int = int(pr_id)
+                        if pid_int not in seen:
+                            seen.add(pid_int)
+                            proc_ids.append(pid_int)
+                self.logger.info("[Orchestration][LIGHT] process_count=%d", len(proc_ids))
+            except Exception as e:
+                self.logger.exception("[Orchestration][LIGHT] process id collection failed: %s", e)
+                return summary
+
+            # 2) For each process, embed only FlowNodes
+            for pid in proc_ids:
+                try:
+                    self.logger.info("[Orchestration][LIGHT][PROCESS] start pid=%s", pid)
+                    p_ctx = self.reader.fetch_process_context(pid)
+
+                    # Node list can be under "nodes" or "flownodes" depending on Reader
+                    node_list = p_ctx.get("nodes") or p_ctx.get("flownodes") or []
+                    self.logger.info("[Orchestration][LIGHT][PROCESS] node_count=%d", len(node_list))
+
+                    for n in node_list:
+                        nid = n.get("id")
+                        if nid is None:
+                            continue
+                        try:
+                            # Fetch per-node context and build artifacts
+                            n_ctx = self.reader.fetch_flownode_context(nid)
+                            art = self.builder.build_flownode_texts(
+                                model_key=model_key,
+                                node_ctx=n_ctx,
+                                process_ctx=p_ctx,
+                                compute_vector=True,
+                                persist=False,
+                            )
+                            # Persist single artifact
+                            self.save_texts_and_vectors([art])
+                            summary["counts"]["flownodes"] += 1
+                            self.logger.info("[Orchestration][LIGHT][NODE] done id=%s", nid)
+                        except Exception as e:
+                            msg = f"[Orchestration][LIGHT][NODE] failed id={nid} err={e}"
+                            summary["errors"].append(msg)
+                            self.logger.exception(msg)
+                except Exception as e:
+                    msg = f"[Orchestration][LIGHT][PROCESS] failed pid={pid} err={e}"
+                    summary["errors"].append(msg)
+                    self.logger.exception(msg)
+
+            self.logger.info(
+                "[Orchestration][LIGHT] done model_key=%s flownodes=%d",
+                model_key, summary["counts"]["flownodes"]
+            )
+            return summary
+        except Exception as e:
+            # Top-level safety: make sure caller always gets a summary
+            msg = f"[Orchestration][LIGHT] fatal err={e}"
+            summary["errors"].append(msg)
+            self.logger.exception(msg)
+            return summary
     # ----------------
     # Persistence API
     # ----------------

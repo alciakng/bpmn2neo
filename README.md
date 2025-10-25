@@ -99,24 +99,42 @@ B2N_CONTAINER__CONTAINER_NAME="YOUR_CONTAINER_NAME"
 ### Python API (recommended)
 ```python
 from bpmn2neo import load_bpmn_to_neo4j, create_node_embeddings, load_and_embed
-from bpmn2neo.settings import Settings
+from bpmn2neo.settings import Settings, Neo4jSettings, OpenAISettings
 
+# Option A) reads from .env
 s = Settings()  # reads .env via pydantic-settings
+
+# Option B) by each Settings object
+s2 = Settings(
+    neo4j=Neo4jSettings(
+        uri="bolt://localhost:7687",
+        user="neo4j",
+        password="your_password",
+        database="neo4j",
+    ),
+    openai=OpenAISettings(
+        api_key="sk-...",  # or api_key_alias="openai/default" if using keyring
+    ),
+)
 
 # 1) Load only
 model_keys = load_bpmn_to_neo4j(
-    bpmn_path="./data/bpmn/Order Process for Pizza.bpmn", #Your Path
+    bpmn_path="./data/bpmn/Order Process for Pizza.bpmn",
     settings=s,
 )
 print("model_keys:", model_keys)
 
 # 2) Embedding only
-create_node_embeddings(model_key=model_keys[0], settings=s)
+# mode="all"   : full hierarchy (FlowNodes → Lanes → Process → Participant → Model)
+# mode="light" : FlowNodes only (faster iteration)
+create_node_embeddings(model_key=model_keys[0], settings=s, mode="all")
+create_node_embeddings(model_key=model_keys[0], settings=s, mode="light")
 
 # 3) Pipeline (load + embed)
 result = load_and_embed(
-    bpmn_path="./data/bpmn/Order Process for Pizza.bpmn", #Your Path
+    bpmn_path="./data/bpmn/Order Process for Pizza.bpmn",
     settings=s,
+    mode="light",  # or "all"
 )
 print("final model_key:", result["model_key"])
 ```
