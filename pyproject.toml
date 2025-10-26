@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bpmn2neo"
-version = "0.1.7"
+version = "0.1.8"
 description = "Load BPMN 2.0 diagrams into Neo4j and create node embeddings for Graph-RAG."
 readme = "README.md"
 requires-python = ">=3.10"

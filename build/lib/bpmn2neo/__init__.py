@@ -12,7 +12,7 @@ from bpmn2neo.settings import Settings
 from bpmn2neo.loader.loader import Loader
 from bpmn2neo.embedder.orchestrator import Orchestrator
 
-__version__ = "0.1.3"
+__version__ = "0.1.8"
 logger = Logger.get_logger("bpmn2neo")
 
 def load_bpmn_to_neo4j(
@@ -72,34 +72,36 @@ def load_bpmn_to_neo4j(
         logger.error("[01.LOAD] failed", extra={"extra": {"err": str(e)}})
         raise
 
-
 def create_node_embeddings(
     model_key: str,
-    settings: Settings,
+    settings: Settings | None = None,
+    mode: str = "all",
 ) -> Dict[str, Any]:
     """
-    High-level API: Build + write node texts, then embed and persist vectors.
-
-    Orchestrator.run_all executes:
-      Reader -> Builder -> ContextWriter -> Embedder
-      in the order of FlowNode -> Lane -> Process -> Participant -> Model.
+    Create node embeddings for a given model.
+    mode:
+      - "all"   : full pipeline (FlowNodes → Lanes → Process → Participant → Model)
+      - "light" : FlowNodes only (fast iteration)
     """
     try:
-        logger.info("[02.EMBED] start", extra={"extra": {"model_key": model_key}})
-        orch = Orchestrator(settings=settings)
-        result = orch.run_all(model_key=model_key)
-        logger.info("[02.EMBED] done", extra={"extra": {"model_key": model_key}})
-        return result
-    except Exception as e:
-        logger.error("[02.EMBED] failed", extra={"extra": {"err": str(e)}})
-        raise
+        cfg = settings or Settings()
+        orch = Orchestrator(cfg, logger=Logger.get_logger("Orchestrator"))
 
+        if mode == "light":
+            return orch.embed_flownode_only(model_key=model_key)
+        if mode == "all":
+            return orch.run_all(model_key=model_key)
+        raise ConfigError(f"Invalid mode: {mode}. Use 'all' or 'light'.")
+    except Exception as e:
+        logger.exception("[EMBED] failed: %s", e)
+        raise
 
 def load_and_embed(
     *,
     bpmn_path: Optional[str] = None,
     model_key: Optional[str] = None,
     settings: Optional[Settings] = None,
+    mode: str = "all",
 ) -> Dict[str, Any]:
     """
     Convenience API: Run both 'load' and 'embed' in one call.
@@ -108,6 +110,9 @@ def load_and_embed(
     - If 'bpmn_path' is None, try to read from settings.runtime.bpmn_file.
     - For embedding, prefer model_key returned from load_bpmn_to_neo4j().
       If not present, fall back to (explicit model_key) or filename stem.
+        mode:
+        - "all"   : embed full pipeline (FlowNodes → Lanes → Process → Participant → Model)
+        - "light" : embed FlowNodes only (fast iteration)
     """
     try:
         cfg = settings or Settings()
@@ -134,7 +139,7 @@ def load_and_embed(
             mk_for_embed = os.path.splitext(os.path.basename(bpmn_path))[0]
 
         # 3) EMBED
-        embed_summary = create_node_embeddings(model_key=mk_for_embed, settings=cfg)
+        embed_summary = create_node_embeddings(model_key=mk_for_embed, settings=cfg, mode=mode)
 
         return {"embed": embed_summary, "model_key": mk_for_embed}
 

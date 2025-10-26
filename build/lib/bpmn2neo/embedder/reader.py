@@ -108,7 +108,7 @@ class Reader:
     # ---------------------------
     # Process
     # ---------------------------
-    def fetch_process_context(self, process_id: int) -> Dict[str, Any]:
+    def fetch_process_context(self, process_id: str) -> Dict[str, Any]:
         """
         Collect full context for a Process (lanes, nodes, edges, data I/O, annotations, groups, handoffs, paths).
         Behavior preserved: returns {} on failure.
@@ -246,7 +246,7 @@ class Reader:
     # -------------------------------------
     # Lane (with nested lanes)
     # -------------------------------------
-    def fetch_lane_context(self, lane_id: int) -> Dict[str, Any]:
+    def fetch_lane_context(self, lane_id: str) -> Dict[str, Any]:
         """
             Collect a lane-scoped context ONLY (no parent process lookup).
             Behavior preserved: returns {} on failure.
@@ -377,7 +377,7 @@ class Reader:
     # ---------------------------
     # FlowNode (Activity|Event|Gateway)
     # ---------------------------
-    def fetch_flownode_context(self, node_id: int) -> Dict[str, Any]:
+    def fetch_flownode_context(self, node_id: str) -> Dict[str, Any]:
         """
         Fetch a single FlowNode and its direct edges.
         Behavior preserved: returns {} if node not found or on failure.
@@ -684,7 +684,7 @@ class Reader:
             self.logger.exception("[FETCH][LANE] handoffs FAILED.")
             return []
 
-    def _paths_for_process(self, process_id: int, *, max_paths: int = 3) -> Dict[str, Any]:
+    def _paths_for_process(self, process_id: str, *, max_paths: int = 3) -> Dict[str, Any]:
         """
         Enumerate up to `max_paths` Start→End paths in a Process (BFS shortest first).
         Returns default empty structure on error.
@@ -837,7 +837,7 @@ class Reader:
 
     def _paths_for_lane(
         self,
-        lane_id: int,
+        lane_id: str,
         *,
         lane_node_ids: List[str] | None = None,
         max_paths: int = 3,

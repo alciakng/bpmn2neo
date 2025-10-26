@@ -281,6 +281,118 @@ class Orchestrator:
         self.logger.info(f"{LOG_PREFIX}[SUMMARY] done", extra={"extra": summary["counts"]})
         return summary
 
+    def embed_flownode_only(self, model_key: str) -> Dict[str, Any]:
+        """
+        Light embedding: build & persist vectors for FlowNodes only.
+        Skips lanes, processes, participants, and model-level artifacts.
+        Returns summary with flownode counts and errors (if any).
+        """
+        self.logger.info(f"{LOG_PREFIX}[OVERVIEW] start", extra={"extra": {"model_key": model_key}})
+
+        summary = {
+            "model_key": model_key,
+            "counts": {"flownodes": 0},
+            "errors": [],
+        }
+
+        # 0) model + participants + their process lists
+        try:
+            overview = self.reader.fetch_participants_and_processes(model_key)
+            participants = overview.get("participants") or []
+            model_meta = overview.get("model") or {}
+
+            self.logger.info(
+                f"{LOG_PREFIX}[OVERVIEW] fetched",
+                extra={"extra": {
+                    "participants": len(participants),
+                    "model_id": model_meta.get("id"),
+                    "model_name": model_meta.get("name"),
+                }},
+            )
+        except Exception as e:
+            self._log_error(summary, f"{LOG_PREFIX}[OVERVIEW] fetch_participants_and_processes failed: {e}")
+            self.logger.error(f"{LOG_PREFIX}[OVERVIEW] aborting pipeline due to overview failure")
+            return summary
+
+        # Build participant→processIds map and (optional) process name index
+        try:
+            proc_ids_by_part: Dict[str, List[str]] = {}
+            proc_name_index: Dict[str, str] = {}
+            for p in participants:
+                pid = p.get("id")
+                if pid is None:
+                    continue
+                plist = p.get("processes") or []
+                ids: List[str] = []
+                for pr in plist:
+                    pr_id = pr.get("id")
+                    pr_name = pr.get("name")
+                    if pr_id is not None:
+                        ids.append(pr_id)
+                        if pr_name:
+                            proc_name_index[pr_id] = pr_name
+                proc_ids_by_part[pid] = ids
+
+            all_process_ids: List[str] = sorted({i for ids in proc_ids_by_part.values() for i in ids})
+            self.logger.info(
+                f"{LOG_PREFIX}[OVERVIEW] index built",
+                extra={"extra": {"unique_processes": len(all_process_ids)}},
+            )
+        except Exception as e:
+            self._log_error(summary, f"{LOG_PREFIX}[OVERVIEW] build index failed: {e}")
+
+        # Artifact stores
+        flownode_artifacts: Dict[str, Dict[str, Any]] = {}
+
+        # ─────────────────────────────────────────────────────────────
+        #  FlowNodes Context
+        # ─────────────────────────────────────────────────────────────
+        for proc_id in (all_process_ids or []):
+            # Fetch process context
+            try:
+                self.logger.info(f"{LOG_PREFIX}[PROCESS] start", extra={"extra": {"process_id": proc_id}})
+                p_ctx = self.reader.fetch_process_context(proc_id)
+            except Exception as e:
+                self._log_error(summary, f"{LOG_PREFIX}[PROCESS] fetch_process_context({proc_id}) failed: {e}")
+                continue
+
+            # FlowNodes
+            try:
+                node_list = (p_ctx.get("nodes") or {}).get("all") or []
+                self.logger.info(
+                    f"{LOG_PREFIX}[NODE] plan",
+                    extra={"extra": {"process_id": proc_id, "node_count": len(node_list)}},
+                )
+                for n in node_list:
+                    nid = n.get("id")
+                    if nid is None:
+                        continue
+                    try:
+                        self.logger.info(f"{LOG_PREFIX}[NODE] start", extra={"extra": {"node_id": nid}})
+                        n_ctx = self.reader.fetch_flownode_context(nid)
+                        n_art = self.builder.build_flownode_texts(
+                            model_key=model_key,
+                            node_ctx=n_ctx,
+                            process_ctx=p_ctx,
+                            compute_vector=True,
+                            persist=False,
+                        )
+                        self.save_texts_and_vectors([n_art])
+                        flownode_artifacts[nid] = n_art
+                        summary["counts"]["flownodes"] += 1
+                        self.logger.info(f"{LOG_PREFIX}[NODE] done", extra={"extra": {"node_id": nid}})
+                    except Exception as e:
+                        self._log_error(summary, f"{LOG_PREFIX}[NODE] node({nid}) failed: {e}")
+            except Exception as e:
+                self._log_error(summary, f"{LOG_PREFIX}[NODE] batch in process({proc_id}) failed: {e}")
+
+            self.logger.info(
+                "[Orchestration][LIGHT] done model_key=%s flownodes=%d",
+                model_key, summary["counts"]["flownodes"]
+            )
+    
+        return summary
+        
     # ----------------
     # Persistence API
     # ----------------

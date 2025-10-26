@@ -246,7 +246,14 @@ SET n.name = '{node_name}',
         props_str = CypherBuilder.format_properties(props, "r")
         
         return f"""
-MATCH (a {{id:'{source}'}}), (b {{id:'{target}', modelKey:'{model_key}'}})
+WITH '{source}' AS sid, '{target}' AS tid, {('NULL' if model_key is None else "'" + model_key + "'")} AS mk
+MATCH (a {{id: sid}}), (b {{id: tid}})
+// Conditional modelKey constraints:
+//  - If node has :bp label, ignore modelKey check
+//  - Else require modelKey match only when mk IS NOT NULL
+WHERE ( (a:bp) OR mk IS NULL OR a.modelKey = mk )
+  AND ( (b:bp) OR mk IS NULL OR b.modelKey = mk )
+WITH DISTINCT a, b
 CREATE (a)-[r:{rel_type}]->(b)
 SET {props_str}
 """.strip()
