@@ -29,8 +29,8 @@ The library is production-oriented: clean configuration via Pydantic `.env`, and
 - Builds nodes and relationships, mapping each BPMN element’s tag attributes to node properties.
 - Structured logs for each phase, with try/except and error reporting.
 
-👉 **Schema details**: see the guide  
-**[Neo4j Graph Schema Guide](docs/Neo4j%20Graph%20Schema%20Guide.md)**
+👉 **Schema details**: see the guide
+**[Neo4j Graph Schema Guide](NEO4J_SCHEMA.md)**
 
 ### Hierarchical Context & Embedding
 - For each node, the pipeline runs:  
@@ -39,8 +39,8 @@ The library is production-oriented: clean configuration via Pydantic `.env`, and
 - **Order**: FlowNode → Lane → Process → Participant → Model (Collaboration).  
   This preserves hierarchy so parents can summarize/aggregate children.
 
-👉 **Embedding details**: see the guide  
-**[BPMN KG Context Embedding Guide](docs/BPMN%20KG%20Context%20Embedding%20Guide.md)**
+👉 **Embedding details**: see the guide
+**[BPMN Embedding Rules Guide](EMBEDDING_RULES.md)**
 
 ---
 
@@ -153,9 +153,8 @@ print("final model_key:", result["model_key"])
 
 ```
 bpmn2neo/
-├─ docs/
-│  ├─ Neo4j Graph Schema Guide.md
-│  └─ BPMN KG Context Embedding Guide.md
+├─ NEO4J_SCHEMA.md         # Neo4j graph schema documentation
+├─ EMBEDDING_RULES.md      # Embedding rules and pipeline documentation
 ├─ src/bpmn2neo/
 │  ├─ config/
 │  │  ├─ exceptions.py        # Domain exceptions (Config/Neo4j/etc.)
