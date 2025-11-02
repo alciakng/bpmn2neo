@@ -222,31 +222,37 @@ class CypherBuilder:
     @staticmethod
     def create_node_query(node_data: Dict[str, Any]) -> str:
         """노드 생성 쿼리"""
-        node_type = node_data['type']
-        node_id = CypherBuilder.escape_string(node_data['id'])
-        node_name = CypherBuilder.escape_string(node_data.get('name', '') or node_data['id'])
-        props = node_data.get('properties', {})
-        model_key = props.get('modelKey',{})
-        props_str = CypherBuilder.format_properties(props, "n")
-        
-        return f"""
+        try:
+            node_type = node_data['type']
+            node_id = CypherBuilder.escape_string(node_data['id'])
+            node_name = CypherBuilder.escape_string(node_data.get('name', '') or node_data['id'])
+            props = node_data.get('properties', {})
+            model_key = props.get('modelKey', '')
+            props_str = CypherBuilder.format_properties(props, "n")
+
+            return f"""
 MERGE (n:{node_type} {{id:'{node_id}', modelKey:'{model_key}'}})
 SET n.name = '{node_name}',
     {props_str}
 """.strip()
+        except Exception as e:
+            logger = Logger.get_logger("CypherBuilder")
+            logger.error(f"노드 쿼리 생성 실패: {e}")
+            raise
     
     @staticmethod
     def create_relationship_query(rel_data: Dict[str, Any]) -> str:
         """관계 생성 쿼리"""
-        source = CypherBuilder.escape_string(rel_data['source'])
-        target = CypherBuilder.escape_string(rel_data['target'])
-        rel_type = rel_data['type']
-        props = rel_data.get('properties', {})
-        model_key = props.get('modelKey',{})
-        props_str = CypherBuilder.format_properties(props, "r")
-        
-        return f"""
-WITH '{source}' AS sid, '{target}' AS tid, {('NULL' if model_key is None else "'" + model_key + "'")} AS mk
+        try:
+            source = CypherBuilder.escape_string(rel_data['source'])
+            target = CypherBuilder.escape_string(rel_data['target'])
+            rel_type = rel_data['type']
+            props = rel_data.get('properties', {})
+            model_key = props.get('modelKey', '')
+            props_str = CypherBuilder.format_properties(props, "r")
+
+            return f"""
+WITH '{source}' AS sid, '{target}' AS tid, {('NULL' if model_key is None or model_key == '' else "'" + str(model_key) + "'")} AS mk
 MATCH (a {{id: sid}}), (b {{id: tid}})
 // Conditional modelKey constraints:
 //  - If node has :bp label, ignore modelKey check
@@ -257,3 +263,7 @@ WITH DISTINCT a, b
 CREATE (a)-[r:{rel_type}]->(b)
 SET {props_str}
 """.strip()
+        except Exception as e:
+            logger = Logger.get_logger("CypherBuilder")
+            logger.error(f"관계 쿼리 생성 실패: {e}")
+            raise
