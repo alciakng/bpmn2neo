@@ -12,7 +12,7 @@ from bpmn2neo.settings import Settings
 from bpmn2neo.loader.loader import Loader
 from bpmn2neo.embedder.orchestrator import Orchestrator
 
-__version__ = "0.1.8"
+__version__ = "0.1.9"
 logger = Logger.get_logger("bpmn2neo")
 
 def load_bpmn_to_neo4j(
