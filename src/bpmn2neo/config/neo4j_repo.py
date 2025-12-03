@@ -223,6 +223,8 @@ class CypherBuilder:
     def create_node_query(node_data: Dict[str, Any]) -> str:
         """노드 생성 쿼리"""
         try:
+            logger = Logger.get_logger("CypherBuilder")
+
             node_type = node_data['type']
             node_id = CypherBuilder.escape_string(node_data['id'])
             node_name = CypherBuilder.escape_string(node_data.get('name', '') or node_data['id'])
@@ -230,11 +232,16 @@ class CypherBuilder:
             model_key = props.get('modelKey', '')
             props_str = CypherBuilder.format_properties(props, "n")
 
-            return f"""
+            query = f"""
 MERGE (n:{node_type} {{id:'{node_id}', modelKey:'{model_key}'}})
 SET n.name = '{node_name}',
     {props_str}
 """.strip()
+
+            logger.info(f"[CYPHER][NODE] Generated query for node type={node_type}, id={node_id}, name={node_name}, model_key={model_key}")
+            logger.debug(f"[CYPHER][NODE] Full query: {query}")
+
+            return query
         except Exception as e:
             logger = Logger.get_logger("CypherBuilder")
             logger.error(f"노드 쿼리 생성 실패: {e}")
@@ -244,6 +251,11 @@ SET n.name = '{node_name}',
     def create_relationship_query(rel_data: Dict[str, Any]) -> str:
         """관계 생성 쿼리"""
         try:
+            logger = Logger.get_logger("CypherBuilder")
+
+            # Log input data BEFORE processing
+            logger.info(f"[CYPHER][REL][INPUT] Creating relationship query with rel_data: {rel_data}")
+
             source = CypherBuilder.escape_string(rel_data['source'])
             target = CypherBuilder.escape_string(rel_data['target'])
             rel_type = rel_data['type']
@@ -251,7 +263,10 @@ SET n.name = '{node_name}',
             model_key = props.get('modelKey', '')
             props_str = CypherBuilder.format_properties(props, "r")
 
-            return f"""
+            # Log processed values
+            logger.info(f"[CYPHER][REL][PROCESSED] source={source}, target={target}, type={rel_type}, model_key={model_key}")
+
+            query = f"""
 WITH '{source}' AS sid, '{target}' AS tid, {('NULL' if model_key is None or model_key == '' else "'" + str(model_key) + "'")} AS mk
 MATCH (a {{id: sid}}), (b {{id: tid}})
 // Conditional modelKey constraints:
@@ -263,7 +278,46 @@ WITH DISTINCT a, b
 CREATE (a)-[r:{rel_type}]->(b)
 SET {props_str}
 """.strip()
+
+            logger.info(f"[CYPHER][REL][OUTPUT] Generated relationship query for {source} -[{rel_type}]-> {target}")
+            logger.debug(f"[CYPHER][REL][OUTPUT] Full query: {query}")
+
+            return query
         except Exception as e:
             logger = Logger.get_logger("CypherBuilder")
             logger.error(f"관계 쿼리 생성 실패: {e}")
+            raise
+
+    @staticmethod
+    def create_category_rel_query(rel_data: Dict[str, Any]) -> str:
+        """카테고리 관계 생성 쿼리 (modelKey 검증 없음)"""
+        try:
+            logger = Logger.get_logger("CypherBuilder")
+
+            # Log input data BEFORE processing
+            logger.info(f"[CYPHER][CATEGORY_REL][INPUT] Creating category relationship query with rel_data: {rel_data}")
+
+            source = CypherBuilder.escape_string(rel_data['source'])
+            target = CypherBuilder.escape_string(rel_data['target'])
+            rel_type = rel_data['type']
+            props = rel_data.get('properties', {})
+            props_str = CypherBuilder.format_properties(props, "r")
+
+            # Log processed values
+            logger.info(f"[CYPHER][CATEGORY_REL][PROCESSED] source={source}, target={target}, type={rel_type}")
+
+            # Simple query without modelKey constraints
+            query = f"""
+MATCH (a {{id: '{source}'}}), (b {{id: '{target}'}})
+CREATE (a)-[r:{rel_type}]->(b)
+SET {props_str}
+""".strip()
+
+            logger.info(f"[CYPHER][CATEGORY_REL][OUTPUT] Generated category relationship query for {source} -[{rel_type}]-> {target}")
+            logger.debug(f"[CYPHER][CATEGORY_REL][OUTPUT] Full query: {query}")
+
+            return query
+        except Exception as e:
+            logger = Logger.get_logger("CypherBuilder")
+            logger.error(f"카테고리 관계 쿼리 생성 실패: {e}")
             raise

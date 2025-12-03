@@ -44,7 +44,13 @@ class Parser:
             Logger.get_logger(self.__class__.__name__).exception("[PARSE][INIT] Initialization failed")
             raise
 
-    def parse(self, xml_file_path: str, model_key: str) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    def parse(
+        self,
+        xml_file_path: str,
+        model_key: str,
+        parent_category_key: str,
+        predecessor_model_key: Optional[str] = None,
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Parse BPMN XML and return (nodes, relationships)."""
         try:
             # Reset state
@@ -85,6 +91,15 @@ class Parser:
                 self.logger.info("[PARSE][CONTAINER] Container node ensured")
             except Exception:
                 self.logger.exception("[PARSE][CONTAINER] Failed to ensure container node")
+                raise
+
+            # Phase 0: Create model-level relationships (parent/predecessor)
+            try:
+                self.logger.info("[PARSE][PHASE0] Creating model relationships")
+                self._create_model_relationships(model_key, parent_category_key, predecessor_model_key)
+                self.logger.info("[PARSE][PHASE0] Done")
+            except Exception:
+                self.logger.exception("[PARSE][PHASE0] Failed")
                 raise
 
             # Phase 1
@@ -222,6 +237,50 @@ class Parser:
             })
         except Exception:
             self.logger.exception("[PARSE][CONTAINER] Failed to append container node")
+            raise
+
+    def _create_model_relationships(
+        self,
+        model_key: str,
+        parent_category_key: str,
+        predecessor_model_key: Optional[str] = None,
+    ):
+        """Create hierarchical and sequential relationships between models.
+
+        This creates:
+        - CONTAINS_MODEL: from parent_category_key to current model (required)
+        - NEXT_PROCESS: from predecessor_model_key to current model (if predecessor_model_key is provided)
+        """
+        try:
+            # Create parent relationship - parent_category_key is now required
+            rel_props: Dict[str, Any] = {}
+            self._attach_common_properties(rel_props, model_key)
+            self.relationships.append({
+                'source': parent_category_key,
+                'target': f'{model_key}_model',
+                'type': 'CONTAINS_MODEL',
+                'properties': rel_props
+            })
+            self.logger.info(
+                f"[PARSE][PHASE0] Created CONTAINS_MODEL: {parent_category_key} -> {model_key}"
+            )
+
+            # Create predecessor relationship if predecessor_model_key is provided and not NaN/None/empty
+            if predecessor_model_key and str(predecessor_model_key).lower() not in ['nan', 'none', '']:
+                rel_props: Dict[str, Any] = {}
+                self._attach_common_properties(rel_props, model_key)
+                self.relationships.append({
+                    'source': predecessor_model_key,
+                    'target': f'{model_key}_model',
+                    'type': 'NEXT_PROCESS',
+                    'properties': rel_props
+                })
+                self.logger.info(
+                    f"[PARSE][PHASE0] Created NEXT_PROCESS: {predecessor_model_key} -> {model_key}"
+                )
+
+        except Exception:
+            self.logger.exception("[PARSE][PHASE0] Failed to create model relationships")
             raise
 
     # ========== Property extraction helpers ==========
@@ -451,16 +510,11 @@ class Parser:
                     'name': model_key,
                     'properties': props
                 })
-                rel_props: Dict[str, Any] = {}
-                self._attach_common_properties(rel_props, model_key)
-                self.relationships.append({
-                    'source': self.container_config.container_id,
-                    'target': f'{model_key}_model',
-                    'type': 'HAS_MODEL',
-                    'properties': rel_props
-                })
+                # NOTE: Container → BPMNModel relationship removed
+                # BPMNModel is now connected to Category via CONTAINS_MODEL (created in Phase 0)
                 self.logger.info("[PARSE][PHASE1] No collaboration; default model created")
                 return
+            
             for collab in collaborations:
                 collab_id = collab.get('id')
                 model_key = final_model_key
@@ -474,14 +528,8 @@ class Parser:
                     'name': final_model_key,
                     'properties': props
                 })
-                rel_props: Dict[str, Any] = {}
-                self._attach_common_properties(rel_props, model_key)
-                self.relationships.append({
-                    'source': self.container_config.container_id,
-                    'target': collab_id,
-                    'type': 'HAS_MODEL',
-                    'properties': rel_props
-                })
+                # NOTE: Container → BPMNModel relationship removed
+                # BPMNModel is now connected to Category via CONTAINS_MODEL (created in Phase 0)
                 self._parse_participants(collab, collab_id, model_key)
         except Exception:
             self.logger.exception("[PARSE][PHASE1] Collaboration/Participant parsing failed")

@@ -40,6 +40,8 @@ class Loader:
         *,
         bpmn_path: str,
         model_key: str,
+        parent_category_key: Optional[str] = None,
+        predecessor_model_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Thin wrapper orchestrating:
@@ -85,7 +87,12 @@ class Loader:
                 logger.error("[LOADER] load_bpmn_file not found on Loader")
                 raise ConfigError("load_bpmn_file is not available on Loader")
 
-            result = self.load_bpmn_file(bpmn_path, model_key) 
+            result = self.load_bpmn_file(
+                bpmn_path,
+                model_key,
+                parent_category_key=parent_category_key,
+                predecessor_model_key=predecessor_model_key
+            )
             logger.info("[LOADER] load done model_key=%s result=%s", model_key, result)
             return result if isinstance(result, dict) else {"model_key": model_key, "status": "ok"}
         except (BpmnParseError, Neo4jRepositoryError, ConfigError, Bpmn2NeoError):
@@ -134,10 +141,51 @@ class Loader:
         self._schema_ready = True
         self.logger.info("[LOAD][SCHEMA] Ensured")
 
+    def _ensure_container_exists(self):
+        """Ensure container node exists in Neo4j (idempotent)."""
+        try:
+            container_id = self.settings.container.container_id
+
+            # Check if container exists
+            check_query = f"""
+            MATCH (c {{id: '{container_id}'}})
+            RETURN c.id as id
+            LIMIT 1
+            """
+            result = self.repository.execute_single_query(check_query)
+
+            if result:
+                self.logger.info("[LOAD][CONTAINER] Container exists", extra={"extra": {"container_id": container_id}})
+                return
+
+            # Container doesn't exist, create it
+            from bpmn2neo.config.neo4j_repo import CypherBuilder
+
+            container_node = {
+                'id': self.settings.container.container_id,
+                'type': self.settings.container.container_type,
+                'name': self.settings.container.container_name,
+                'properties': {
+                    'containerType': self.settings.container.container_type,
+                    'containerId': self.settings.container.container_id
+                }
+            }
+
+            container_query = CypherBuilder.create_node_query(container_node)
+            self.repository.execute_queries([(container_query, {})])
+
+            self.logger.info("[LOAD][CONTAINER] Container created", extra={"extra": {"container_id": container_id}})
+
+        except Exception:
+            self.logger.exception("[LOAD][CONTAINER] Failed to ensure container exists")
+            raise
+
     def load_bpmn_file(
         self,
         xml_file_path: str,
-        model_key: str
+        model_key: str,
+        parent_category_key: Optional[str] = None,
+        predecessor_model_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Parse a BPMN XML file and load nodes/relationships into Neo4j.
@@ -169,7 +217,12 @@ class Loader:
         # 1) Parse XML
         try:
             self.logger.info("[LOAD][PARSE] Begin")
-            nodes, relationships = self.parser.parse(xml_file_path, model_key)
+            nodes, relationships = self.parser.parse(
+                xml_file_path,
+                model_key,
+                parent_category_key=parent_category_key,
+                predecessor_model_key=predecessor_model_key
+            )
             model_keys = self.parser.get_model_keys()
             self.logger.info(
                 "[LOAD][PARSE] Done",
@@ -349,6 +402,154 @@ class Loader:
             "relationship_statistics": rel_stats,
             "parser_model_keys": model_keys,
         }
+
+    def _ensure_category_node(
+        self,
+        model_key: str,
+        name: str,
+        parent_category_key: Optional[str] = None
+    ) -> bool:
+        """
+        Ensure category node exists in Neo4j (idempotent).
+
+        Args:
+            model_key: Category model key (same as name)
+            name: Category display name
+            parent_category_key: Parent category key (optional)
+
+        Returns:
+            True if node was created, False if already exists
+        """
+        try:
+            from bpmn2neo.config.neo4j_repo import CypherBuilder
+
+            category_node_id = f'{model_key}_category'
+
+            # Check if category exists
+            check_query = f"""
+            MATCH (c:Category {{id: '{category_node_id}'}})
+            RETURN c.id as id
+            LIMIT 1
+            """
+            result = self.repository.execute_single_query(check_query)
+
+            if result:
+                self.logger.info(
+                    "[LOAD][CATEGORY] Category exists, skipping",
+                    extra={"extra": {"model_key": model_key, "node_id": category_node_id}}
+                )
+                return False
+
+            # Category doesn't exist, create it
+            properties = {
+                'id': category_node_id,
+                'modelKey': model_key,
+                'name': name,
+                'containerType': self.settings.container.container_type,
+                'containerId': self.settings.container.container_id
+            }
+
+            node_data = {
+                'id': category_node_id,
+                'type': 'Category',
+                'name': name,
+                'properties': properties
+            }
+
+            queries = []
+
+            # Create node query
+            node_query = CypherBuilder.create_node_query(node_data)
+            queries.append((node_query, {}))
+
+            # Create HAS_CATEGORY or HAS_SUBCATEGORY relationship
+            if parent_category_key and str(parent_category_key).lower() not in ['nan', 'none', '']:
+                # This is a subcategory
+                parent_rel_props = {
+                    'containerType': self.settings.container.container_type,
+                    'containerId': self.settings.container.container_id,
+                    'modelKey': model_key
+                }
+                parent_rel = {
+                    'source': f'{parent_category_key}_category',
+                    'target': category_node_id,
+                    'type': 'HAS_SUBCATEGORY',
+                    'properties': parent_rel_props
+                }
+                parent_query = CypherBuilder.create_category_rel_query(parent_rel)
+                queries.append((parent_query, {}))
+            else:
+                # This is a top-level category - connect to container
+                container_rel_props = {
+                    'containerType': self.settings.container.container_type,
+                    'containerId': self.settings.container.container_id,
+                    'modelKey': model_key
+                }
+                container_rel = {
+                    'source': self.settings.container.container_id,
+                    'target': category_node_id,
+                    'type': 'HAS_CATEGORY',
+                    'properties': container_rel_props
+                }
+                rel_query = CypherBuilder.create_category_rel_query(container_rel)
+                queries.append((rel_query, {}))
+
+            # Execute all queries
+            self.repository.execute_queries(queries)
+
+            self.logger.info(
+                "[LOAD][CATEGORY] Category created",
+                extra={"extra": {"model_key": model_key, "node_id": category_node_id}}
+            )
+
+            return True
+
+        except Exception:
+            self.logger.exception("[LOAD][CATEGORY] Failed to ensure category node")
+            raise
+
+    def create_category_node(
+        self,
+        name: str,
+        parent_category_key: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Create a category node in Neo4j without loading a BPMN file.
+
+        Args:
+            name: Display name for the category node (also used as model_key)
+            parent_category_key: Parent category key (optional)
+
+        Returns:
+            The created model_key (same as name)
+        """
+        try:
+            # Use name as model_key
+            model_key = name
+
+            self.logger.info(
+                "[CATEGORY] Creating category node",
+                extra={"extra": {
+                    "model_key": model_key,
+                    "name": name,
+                    "parent_category_key": parent_category_key
+                }},
+            )
+
+            # Ensure schema (constraints/indexes)
+            self._ensure_schema()
+
+            # Ensure container node exists
+            self._ensure_container_exists()
+
+            # Ensure category node exists (idempotent)
+            self._ensure_category_node(model_key, name, parent_category_key)
+
+            return model_key
+
+        except Exception as e:
+            self.logger.error("[CATEGORY] Failed to create category node", extra={"extra": {"err": str(e)}})
+            raise
 
     def cleanup_models(self, model_keys: List[str]) -> bool:
         """Remove all data for given model keys."""
