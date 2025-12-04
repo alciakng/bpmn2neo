@@ -93,19 +93,10 @@ class Parser:
                 self.logger.exception("[PARSE][CONTAINER] Failed to ensure container node")
                 raise
 
-            # Phase 0: Create model-level relationships (parent/predecessor)
-            try:
-                self.logger.info("[PARSE][PHASE0] Creating model relationships")
-                self._create_model_relationships(model_key, parent_category_key, predecessor_model_key)
-                self.logger.info("[PARSE][PHASE0] Done")
-            except Exception:
-                self.logger.exception("[PARSE][PHASE0] Failed")
-                raise
-
-            # Phase 1
+            # Phase 1: Parse collaborations & create model relationships
             try:
                 self.logger.info("[PARSE][PHASE1] Parsing collaborations & participants")
-                self._parse_collaborations(root, model_key)
+                self._parse_collaborations(root, model_key, parent_category_key, predecessor_model_key)
                 self.logger.info("[PARSE][PHASE1] Done")
             except Exception:
                 self.logger.exception("[PARSE][PHASE1] Failed")
@@ -239,48 +230,51 @@ class Parser:
             self.logger.exception("[PARSE][CONTAINER] Failed to append container node")
             raise
 
-    def _create_model_relationships(
+    def _create_model_node_relationships(
         self,
+        model_node_id: str,
         model_key: str,
         parent_category_key: str,
-        predecessor_model_key: Optional[str] = None,
+        predecessor_model_key: Optional[str] = None
     ):
-        """Create hierarchical and sequential relationships between models.
+        """Create relationships from category and predecessor to BPMNModel node.
 
-        This creates:
-        - CONTAINS_MODEL: from parent_category_key to current model (required)
-        - NEXT_PROCESS: from predecessor_model_key to current model (if predecessor_model_key is provided)
+        Args:
+            model_node_id: The actual node ID of the BPMNModel (e.g., collab_id or model_key_model)
+            model_key: The model key for properties
+            parent_category_key: Parent category key
+            predecessor_model_key: Optional predecessor model key (already in node ID format)
         """
         try:
-            # Create parent relationship - parent_category_key is now required
-            rel_props: Dict[str, Any] = {}
-            self._attach_common_properties(rel_props, model_key)
-            self.relationships.append({
-                'source': f'{parent_category_key}_category',
-                'target': f'{model_key}_model',
-                'type': 'CONTAINS_MODEL',
-                'properties': rel_props
-            })
-            self.logger.info(
-                f"[PARSE][PHASE0] Created CONTAINS_MODEL: {parent_category_key}_category -> {model_key}_model"
-            )
+            # Create CONTAINS_MODEL relationship from category to this model
+            if parent_category_key:
+                rel_props: Dict[str, Any] = {}
+                self._attach_common_properties(rel_props, model_key)
+                self.relationships.append({
+                    'source': f'{parent_category_key}_category',
+                    'target': model_node_id,
+                    'type': 'CONTAINS_MODEL',
+                    'properties': rel_props
+                })
+                self.logger.info(
+                    f"[PARSE][PHASE1] Created CONTAINS_MODEL: {parent_category_key}_category -> {model_node_id}"
+                )
 
-            # Create predecessor relationship if predecessor_model_key is provided and not NaN/None/empty
+            # Create NEXT_PROCESS relationship from predecessor to this model
             if predecessor_model_key and str(predecessor_model_key).lower() not in ['nan', 'none', '']:
                 rel_props: Dict[str, Any] = {}
                 self._attach_common_properties(rel_props, model_key)
                 self.relationships.append({
-                    'source': f'{predecessor_model_key}_model',
-                    'target': f'{model_key}_model',
+                    'source': predecessor_model_key,
+                    'target': model_node_id,
                     'type': 'NEXT_PROCESS',
                     'properties': rel_props
                 })
                 self.logger.info(
-                    f"[PARSE][PHASE0] Created NEXT_PROCESS: {predecessor_model_key}_model -> {model_key}_model"
+                    f"[PARSE][PHASE1] Created NEXT_PROCESS: {predecessor_model_key} -> {model_node_id}"
                 )
-
         except Exception:
-            self.logger.exception("[PARSE][PHASE0] Failed to create model relationships")
+            self.logger.exception("[PARSE][PHASE1] Failed to create model node relationships")
             raise
 
     # ========== Property extraction helpers ==========
@@ -494,27 +488,38 @@ class Parser:
 
     # ====================== Parsing methods ======================
 
-    def _parse_collaborations(self, root: ET.Element, final_model_key: str):
-        """Parse <collaboration> and its <participant> elements."""
+    def _parse_collaborations(
+        self,
+        root: ET.Element,
+        final_model_key: str,
+        parent_category_key: str,
+        predecessor_model_key: Optional[str] = None
+    ):
+        """Parse <collaboration> and its <participant> elements, and create model relationships."""
         try:
             collaborations = self._find_by_local_name(root, 'collaboration')
             if not collaborations:
                 # Fallback: create a default BPMNModel
                 model_key = final_model_key
+                model_node_id = f'{model_key}_model'
                 self._modelkey_by_collab['__default__'] = model_key
-                props = {'id': f'{model_key}_model', 'modelKey': model_key}
+                props = {'id': model_node_id, 'modelKey': model_key}
                 self._attach_common_properties(props, model_key)
                 self.nodes.append({
-                    'id': f'{model_key}_model',
+                    'id': model_node_id,
                     'type': 'BPMNModel',
                     'name': model_key,
                     'properties': props
                 })
-                # NOTE: Container → BPMNModel relationship removed
-                # BPMNModel is now connected to Category via CONTAINS_MODEL (created in Phase 0)
+
+                # Create model relationships
+                self._create_model_node_relationships(
+                    model_node_id, model_key, parent_category_key, predecessor_model_key
+                )
+
                 self.logger.info("[PARSE][PHASE1] No collaboration; default model created")
                 return
-            
+
             for collab in collaborations:
                 collab_id = collab.get('id')
                 model_key = final_model_key
@@ -528,8 +533,12 @@ class Parser:
                     'name': final_model_key,
                     'properties': props
                 })
-                # NOTE: Container → BPMNModel relationship removed
-                # BPMNModel is now connected to Category via CONTAINS_MODEL (created in Phase 0)
+
+                # Create model relationships
+                self._create_model_node_relationships(
+                    collab_id, model_key, parent_category_key, predecessor_model_key
+                )
+
                 self._parse_participants(collab, collab_id, model_key)
         except Exception:
             self.logger.exception("[PARSE][PHASE1] Collaboration/Participant parsing failed")
