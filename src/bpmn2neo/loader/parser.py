@@ -256,13 +256,13 @@ class Parser:
             rel_props: Dict[str, Any] = {}
             self._attach_common_properties(rel_props, model_key)
             self.relationships.append({
-                'source': parent_category_key,
+                'source': f'{parent_category_key}_category',
                 'target': f'{model_key}_model',
                 'type': 'CONTAINS_MODEL',
                 'properties': rel_props
             })
             self.logger.info(
-                f"[PARSE][PHASE0] Created CONTAINS_MODEL: {parent_category_key} -> {model_key}"
+                f"[PARSE][PHASE0] Created CONTAINS_MODEL: {parent_category_key}_category -> {model_key}_model"
             )
 
             # Create predecessor relationship if predecessor_model_key is provided and not NaN/None/empty
@@ -270,13 +270,13 @@ class Parser:
                 rel_props: Dict[str, Any] = {}
                 self._attach_common_properties(rel_props, model_key)
                 self.relationships.append({
-                    'source': predecessor_model_key,
+                    'source': f'{predecessor_model_key}_model',
                     'target': f'{model_key}_model',
                     'type': 'NEXT_PROCESS',
                     'properties': rel_props
                 })
                 self.logger.info(
-                    f"[PARSE][PHASE0] Created NEXT_PROCESS: {predecessor_model_key} -> {model_key}"
+                    f"[PARSE][PHASE0] Created NEXT_PROCESS: {predecessor_model_key}_model -> {model_key}_model"
                 )
 
         except Exception:

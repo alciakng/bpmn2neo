@@ -12,7 +12,7 @@ from bpmn2neo.settings import Settings
 from bpmn2neo.loader.loader import Loader
 from bpmn2neo.embedder.orchestrator import Orchestrator
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 logger = Logger.get_logger("bpmn2neo")
 
 __all__ = [
@@ -63,7 +63,7 @@ def load_bpmn_to_neo4j(
                 parent_category_key=parent_category_key,
                 predecessor_model_key=predecessor_model_key
             )
-        else:
+        else:   
             mk_for_load = os.path.splitext(os.path.basename(bpmn_path))[0]
             summary = loader.load(
                 bpmn_path=bpmn_path,
