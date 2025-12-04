@@ -246,35 +246,66 @@ class Parser:
             predecessor_model_key: Optional predecessor model key (already in node ID format)
         """
         try:
+            self.logger.info(
+                f"[PARSE][PHASE1][REL] Creating relationships for model_node_id={model_node_id}, "
+                f"model_key={model_key}, parent_category_key={parent_category_key}, "
+                f"predecessor_model_key={predecessor_model_key}"
+            )
+
             # Create CONTAINS_MODEL relationship from category to this model
             if parent_category_key:
+                category_source = f'{parent_category_key}_category'
                 rel_props: Dict[str, Any] = {}
                 self._attach_common_properties(rel_props, model_key)
-                self.relationships.append({
-                    'source': f'{parent_category_key}_category',
+
+                relationship = {
+                    'source': category_source,
                     'target': model_node_id,
                     'type': 'CONTAINS_MODEL',
                     'properties': rel_props
-                })
+                }
+
+                self.relationships.append(relationship)
+
                 self.logger.info(
-                    f"[PARSE][PHASE1] Created CONTAINS_MODEL: {parent_category_key}_category -> {model_node_id}"
+                    f"[PARSE][PHASE1][REL] ✓ Created CONTAINS_MODEL relationship: "
+                    f"source={category_source} -> target={model_node_id}, properties={rel_props}"
+                )
+            else:
+                self.logger.warning(
+                    f"[PARSE][PHASE1][REL] ✗ Skipped CONTAINS_MODEL: parent_category_key is empty/None"
                 )
 
             # Create NEXT_PROCESS relationship from predecessor to this model
             if predecessor_model_key and str(predecessor_model_key).lower() not in ['nan', 'none', '']:
                 rel_props: Dict[str, Any] = {}
                 self._attach_common_properties(rel_props, model_key)
-                self.relationships.append({
+
+                relationship = {
                     'source': predecessor_model_key,
                     'target': model_node_id,
                     'type': 'NEXT_PROCESS',
                     'properties': rel_props
-                })
+                }
+
+                self.relationships.append(relationship)
+
                 self.logger.info(
-                    f"[PARSE][PHASE1] Created NEXT_PROCESS: {predecessor_model_key} -> {model_node_id}"
+                    f"[PARSE][PHASE1][REL] ✓ Created NEXT_PROCESS relationship: "
+                    f"source={predecessor_model_key} -> target={model_node_id}, properties={rel_props}"
                 )
+            else:
+                self.logger.info(
+                    f"[PARSE][PHASE1][REL] ○ Skipped NEXT_PROCESS: predecessor_model_key={predecessor_model_key} "
+                    f"(empty or invalid)"
+                )
+
+            self.logger.info(
+                f"[PARSE][PHASE1][REL] Total relationships count after creation: {len(self.relationships)}"
+            )
+
         except Exception:
-            self.logger.exception("[PARSE][PHASE1] Failed to create model node relationships")
+            self.logger.exception("[PARSE][PHASE1][REL] Failed to create model node relationships")
             raise
 
     # ========== Property extraction helpers ==========
@@ -497,14 +528,25 @@ class Parser:
     ):
         """Parse <collaboration> and its <participant> elements, and create model relationships."""
         try:
+            self.logger.info(
+                f"[PARSE][PHASE1][COLLAB] Starting collaboration parsing: "
+                f"final_model_key={final_model_key}, parent_category_key={parent_category_key}, "
+                f"predecessor_model_key={predecessor_model_key}"
+            )
+
             collaborations = self._find_by_local_name(root, 'collaboration')
+
             if not collaborations:
+                self.logger.info("[PARSE][PHASE1][COLLAB] No collaboration found, creating default BPMNModel")
+
                 # Fallback: create a default BPMNModel
                 model_key = final_model_key
                 model_node_id = f'{model_key}_model'
                 self._modelkey_by_collab['__default__'] = model_key
+
                 props = {'id': model_node_id, 'modelKey': model_key}
                 self._attach_common_properties(props, model_key)
+
                 self.nodes.append({
                     'id': model_node_id,
                     'type': 'BPMNModel',
@@ -512,21 +554,38 @@ class Parser:
                     'properties': props
                 })
 
+                self.logger.info(
+                    f"[PARSE][PHASE1][COLLAB] Created default BPMNModel node: "
+                    f"id={model_node_id}, name={model_key}, properties={props}"
+                )
+
                 # Create model relationships
+                self.logger.info(
+                    f"[PARSE][PHASE1][COLLAB] Calling _create_model_node_relationships for default model"
+                )
                 self._create_model_node_relationships(
                     model_node_id, model_key, parent_category_key, predecessor_model_key
                 )
 
-                self.logger.info("[PARSE][PHASE1] No collaboration; default model created")
+                self.logger.info("[PARSE][PHASE1][COLLAB] Default model setup complete")
                 return
 
-            for collab in collaborations:
+            self.logger.info(f"[PARSE][PHASE1][COLLAB] Found {len(collaborations)} collaboration(s)")
+
+            for idx, collab in enumerate(collaborations):
                 collab_id = collab.get('id')
                 model_key = final_model_key
                 self._modelkey_by_collab[collab_id] = model_key
+
+                self.logger.info(
+                    f"[PARSE][PHASE1][COLLAB] Processing collaboration [{idx+1}/{len(collaborations)}]: "
+                    f"collab_id={collab_id}, model_key={model_key}"
+                )
+
                 props = self._extract_attributes(collab)
                 props['modelKey'] = model_key
                 self._attach_common_properties(props, model_key)
+
                 self.nodes.append({
                     'id': collab_id,
                     'type': 'BPMNModel',
@@ -534,14 +593,25 @@ class Parser:
                     'properties': props
                 })
 
+                self.logger.info(
+                    f"[PARSE][PHASE1][COLLAB] Created BPMNModel node: "
+                    f"id={collab_id}, name={final_model_key}, properties={props}"
+                )
+
                 # Create model relationships
+                self.logger.info(
+                    f"[PARSE][PHASE1][COLLAB] Calling _create_model_node_relationships for collaboration {collab_id}"
+                )
                 self._create_model_node_relationships(
                     collab_id, model_key, parent_category_key, predecessor_model_key
                 )
 
                 self._parse_participants(collab, collab_id, model_key)
+
+            self.logger.info("[PARSE][PHASE1][COLLAB] Collaboration parsing complete")
+
         except Exception:
-            self.logger.exception("[PARSE][PHASE1] Collaboration/Participant parsing failed")
+            self.logger.exception("[PARSE][PHASE1][COLLAB] Collaboration/Participant parsing failed")
             raise
 
     def _parse_participants(self, collab: ET.Element, collab_id: str, model_key: str):

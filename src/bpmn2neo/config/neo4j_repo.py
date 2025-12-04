@@ -256,9 +256,17 @@ SET n.name = '{node_name}',
             # Log input data BEFORE processing
             logger.info(f"[CYPHER][REL][INPUT] Creating relationship query with rel_data: {rel_data}")
 
+            rel_type = rel_data['type']
+
+            # Use simple id-based matching for category relationships
+            # (category nodes don't have modelKey)
+            if rel_type in ['CONTAINS_MODEL', 'HAS_CATEGORY', 'HAS_SUBCATEGORY']:
+                logger.info(f"[CYPHER][REL] Detected category relationship type: {rel_type}, using create_category_rel_query")
+                return CypherBuilder.create_category_rel_query(rel_data)
+
+            # Standard relationship query with modelKey constraints
             source = CypherBuilder.escape_string(rel_data['source'])
             target = CypherBuilder.escape_string(rel_data['target'])
-            rel_type = rel_data['type']
             props = rel_data.get('properties', {})
             model_key = props.get('modelKey', '')
             props_str = CypherBuilder.format_properties(props, "r")
