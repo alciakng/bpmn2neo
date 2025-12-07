@@ -260,7 +260,7 @@ SET n.name = '{node_name}',
 
             # Use simple id-based matching for category relationships
             # (category nodes don't have modelKey)
-            if rel_type in ['CONTAINS_MODEL', 'HAS_CATEGORY', 'HAS_SUBCATEGORY']:
+            if rel_type in ['CONTAINS_MODEL', 'HAS_CATEGORY', 'HAS_SUBCATEGORY','NEXT_PROCESS']:
                 logger.info(f"[CYPHER][REL] Detected category relationship type: {rel_type}, using create_category_rel_query")
                 return CypherBuilder.create_category_rel_query(rel_data)
 
